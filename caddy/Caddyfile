@@ -1,0 +1,5 @@
+# Template/reference only. scripts/install-local.sh generates the production file
+# with a bcrypt password hash.
+:8080 {
+    reverse_proxy 127.0.0.1:8000
+}
