@@ -1,0 +1,7 @@
+Otwórz TCP/9019 wyłącznie z adresu FreePBX do adresu LXC.
+
+Przykład nftables na LXC (dopasuj interfejs/IP):
+  nft add rule inet filter input ip saddr 192.168.1.10 tcp dport 9019 accept
+  nft add rule inet filter input tcp dport 9019 drop
+
+Panel 8080 ogranicz do sieci administracyjnej/VPN.
