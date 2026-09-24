@@ -1,0 +1,6 @@
+[ai-icproject]
+exten => s,1,NoOp(AI IC Project Agent)
+ same => n,Answer()
+ same => n,Set(AI_UUID=${UUID()})
+ same => n,AudioSocket(${AI_UUID},192.168.1.50:9019)
+ same => n,Hangup()
