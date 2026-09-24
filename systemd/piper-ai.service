@@ -1,0 +1,15 @@
+[Unit]
+Description=Piper TTS HTTP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/freepbx-ai/piper
+ExecStart=/opt/freepbx-ai/.venv/bin/python -m piper.http_server --host 127.0.0.1 --port 5000 -m pl_PL-mc_speech-medium --data-dir /var/lib/freepbx-ai/piper
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
