@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FreePBX AI → IC Project</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:1050px;margin:30px auto;padding:0 16px;background:#f6f7f9;color:#1b1d21}
+    h1{margin-bottom:4px}.card{background:#fff;border:1px solid #ddd;border-radius:12px;padding:18px;margin:16px 0}
+    label{display:block;font-weight:600;margin-top:12px}input,textarea,select{width:100%;box-sizing:border-box;padding:9px;margin-top:5px;border:1px solid #bbb;border-radius:7px}
+    textarea{min-height:120px}button{padding:9px 14px;margin:8px 6px 0 0;border:0;border-radius:7px;cursor:pointer}
+    .primary{background:#111;color:#fff}.test{background:#e8edf5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .ok{color:#19712c}.err{color:#a01818}.muted{color:#666;font-size:.92em}
+    @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <h1>FreePBX AI → IC Project</h1>
+  <div class="muted">Lokalny voicebot: AudioSocket + Whisper + Ollama + Piper + IC Project</div>
+
+  {% if request.query_params.get('saved') %}
+  <p class="ok">Ustawienia zapisane.</p>
+  {% endif %}
+
+  <form method="post" action="/save">
+    <div class="card">
+      <h2>LLM / Ollama</h2>
+      <div class="grid">
+        <div><label>URL Ollama<input name="ollama_url" value="{{s.ollama_url}}"></label></div>
+        <div><label>Model<input name="ollama_model" value="{{s.ollama_model}}"></label></div>
+      </div>
+      <button type="button" class="test" onclick="testApi('/api/test/ollama','ollamaResult')">Test Ollama</button>
+      <span id="ollamaResult"></span>
+    </div>
+
+    <div class="card">
+      <h2>Speech-to-text</h2>
+      <div class="grid">
+        <div><label>Whisper model<input name="whisper_model" value="{{s.whisper_model}}"></label></div>
+        <div><label>Device<input name="whisper_device" value="{{s.whisper_device}}"></label></div>
+        <div><label>Compute type<input name="whisper_compute_type" value="{{s.whisper_compute_type}}"></label></div>
+        <div><label>Cisza kończąca wypowiedź [ms]<input type="number" name="silence_ms" value="{{s.silence_ms}}"></label></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>TTS / Piper</h2>
+      <div class="grid">
+        <div><label>URL Piper<input name="piper_url" value="{{s.piper_url}}"></label></div>
+        <div><label>Głos<input name="piper_voice" value="{{s.piper_voice}}"></label></div>
+      </div>
+      <button type="button" class="test" onclick="testApi('/api/test/piper','piperResult')">Test Piper</button>
+      <span id="piperResult"></span>
+    </div>
+
+    <div class="card">
+      <h2>IC Project</h2>
+      <div class="grid">
+        <div><label>Instance slug<input name="icp_instance" value="{{s.icp_instance}}"></label></div>
+        <div><label>Board column ID<input name="icp_board_column" value="{{s.icp_board_column}}"></label></div>
+        <div>
+          <label>API token
+            <input type="password" name="icp_token" placeholder="{% if s.icp_token_set %}token zapisany — zostaw puste aby zachować{% else %}wklej token{% endif %}">
+          </label>
+        </div>
+        <div>
+          <label>Domyślny priorytet
+            <select name="icp_priority">
+              {% for p in ['low','normal','high'] %}
+              <option value="{{p}}" {% if s.icp_priority==p %}selected{% endif %}>{{p}}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      </div>
+      <button type="button" class="test" onclick="testApi('/api/test/icp','icpResult')">Test IC Project</button>
+      <span id="icpResult"></span>
+    </div>
+
+    <div class="card">
+      <h2>WireGuard client</h2>
+      <p class="muted">
+        Opcjonalny tunel do lokalizacji z FreePBX. Konfiguracja jest zapisywana jako
+        <code>/etc/wireguard/wg0.conf</code> z prawami 600. Istniejący klucz prywatny
+        nie jest wyświetlany w panelu.
+      </p>
+      <p>
+        Status:
+        {% if wg.ok and wg.active %}
+          <span class="ok">aktywny</span>
+        {% elif wg.ok %}
+          <span class="err">nieaktywny</span>
+        {% else %}
+          <span class="err">błąd</span>
+        {% endif %}
+      </p>
+      <label>Nowa konfiguracja wg0.conf
+        <textarea id="wgConfig" placeholder="[Interface]
+PrivateKey = ...
+Address = 10.20.30.2/32
+
+[Peer]
+PublicKey = ...
+Endpoint = vpn.example.pl:51820
+AllowedIPs = 192.168.10.0/24
+PersistentKeepalive = 25"></textarea>
+      </label>
+      <label style="font-weight:400">
+        <input id="wgEnable" type="checkbox" checked style="width:auto"> uruchom i włącz przy starcie
+      </label>
+      <button type="button" class="test" onclick="applyWireGuard()">Zapisz i uruchom WireGuard</button>
+      <button type="button" class="test" onclick="testApi('/api/wireguard/status','wgResult','GET')">Odśwież status</button>
+      <span id="wgResult"></span>
+    </div>
+
+    <div class="card">
+      <h2>Agent</h2>
+      <label>Powitanie<textarea name="greeting">{{s.greeting}}</textarea></label>
+      <label>Prompt systemowy<textarea name="system_prompt">{{s.system_prompt}}</textarea></label>
+      <label>Maksymalna liczba tur<input type="number" name="max_turns" value="{{s.max_turns}}"></label>
+    </div>
+
+    <button class="primary" type="submit">Zapisz konfigurację</button>
+  </form>
+
+  <script>
+  async function testApi(url,id,method='POST'){
+    const el=document.getElementById(id); el.textContent=' test...'; el.className='';
+    try{
+      const r=await fetch(url,{method:method}); const j=await r.json();
+      el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.message?' — '+j.message:'')+(j.models?' — '+j.models.join(', '):'');
+      el.className=j.ok?'ok':'err';
+    }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
+  }
+
+  async function applyWireGuard(){
+    const el=document.getElementById('wgResult');
+    const fd=new FormData();
+    fd.append('config',document.getElementById('wgConfig').value);
+    fd.append('enable',document.getElementById('wgEnable').checked ? 'true' : 'false');
+    el.textContent=' zapisuję...';
+    try{
+      const r=await fetch('/api/wireguard/apply',{method:'POST',body:fd});
+      const j=await r.json();
+      el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.active?' — tunel aktywny':'')+(j.output?' — '+j.output:'');
+      el.className=j.ok?'ok':'err';
+      if(j.ok) document.getElementById('wgConfig').value='';
+    }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
+  }
+  </script>
+</body>
+</html>
