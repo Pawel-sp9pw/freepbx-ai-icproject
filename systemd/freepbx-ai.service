@@ -1,0 +1,16 @@
+[Unit]
+Description=FreePBX AI IC Project Agent
+After=network-online.target ollama.service piper-ai.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/freepbx-ai-icproject
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/freepbx-ai/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
