@@ -25,7 +25,7 @@ Zasady zbierania danych:
 - Jeśli jest description, ale nie ma title, utwórz krótki title na podstawie description.
 - Nie wymagaj od użytkownika ponownego podawania informacji, którą już podał.
 - Jeśli brakuje danych, zadaj tylko jedno krótkie pytanie i ustaw done=false.
-- Jeśli masz co najmniej nazwę firmy oraz description, możesz ustawić done=true. Kontakt jest pomocny, ale nie blokuje zakończenia.
+- Ustaw done=true dopiero, gdy masz nazwę firmy, numer kontaktowy oraz description. Wszystkie trzy pola są wymagane przed potwierdzeniem i zapisaniem zgłoszenia.
 - Nie poprawiaj ani nie wymyślaj danych użytkownika; zachowaj je możliwie dosłownie.
 """
 
