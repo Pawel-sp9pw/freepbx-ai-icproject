@@ -55,14 +55,67 @@
 
     <div class="card">
       <h2>IC Project</h2>
+      <p class="muted">
+        Najpierw wpisz Instance slug i token, potem pobierz projekty. Następnie wybierz:
+        projekt → tablicę → kolumnę dla nowych zgłoszeń.
+      </p>
+
       <div class="grid">
-        <div><label>Instance slug<input name="icp_instance" value="{{s.icp_instance}}"></label></div>
-        <div><label>Board column ID<input name="icp_board_column" value="{{s.icp_board_column}}"></label></div>
+        <div>
+          <label>Instance slug
+            <input name="icp_instance" value="{{s.icp_instance}}" placeholder="np. f7d32c">
+          </label>
+        </div>
         <div>
           <label>API token
             <input type="password" name="icp_token" placeholder="{% if s.icp_token_set %}token zapisany — zostaw puste aby zachować{% else %}wklej token{% endif %}">
           </label>
         </div>
+      </div>
+
+      <button type="button" class="test" onclick="loadICPProjects()">Pobierz projekty</button>
+      <span id="icpDiscoveryResult"></span>
+
+      <div class="grid">
+        <div>
+          <label>Projekt
+            <select id="icpProjectSelect" onchange="onICPProjectChange()">
+              <option value="">— wybierz projekt —</option>
+              {% if s.icp_project_id %}
+              <option value="{{s.icp_project_id}}" selected>{{s.icp_project_name or s.icp_project_id}}</option>
+              {% endif %}
+            </select>
+          </label>
+          <input type="hidden" name="icp_project_id" id="icpProjectId" value="{{s.icp_project_id}}">
+          <input type="hidden" name="icp_project_name" id="icpProjectName" value="{{s.icp_project_name}}">
+        </div>
+
+        <div>
+          <label>Tablica
+            <select id="icpBoardSelect" onchange="onICPBoardChange()">
+              <option value="">— wybierz tablicę —</option>
+              {% if s.icp_board_slug %}
+              <option value="{{s.icp_board_slug}}" selected>{{s.icp_board_name or s.icp_board_slug}}</option>
+              {% endif %}
+            </select>
+          </label>
+          <input type="hidden" name="icp_board_slug" id="icpBoardSlug" value="{{s.icp_board_slug}}">
+          <input type="hidden" name="icp_board_name" id="icpBoardName" value="{{s.icp_board_name}}">
+        </div>
+
+        <div>
+          <label>Kolumna dla nowych zgłoszeń
+            <select id="icpColumnSelect" onchange="onICPColumnChange()">
+              <option value="">— wybierz kolumnę —</option>
+              {% if s.icp_board_column %}
+              <option value="{{s.icp_board_column}}" selected>{{s.icp_board_column_name or s.icp_board_column}}</option>
+              {% endif %}
+            </select>
+          </label>
+          <input type="hidden" name="icp_board_column" id="icpBoardColumn" value="{{s.icp_board_column}}">
+          <input type="hidden" name="icp_board_column_name" id="icpBoardColumnName" value="{{s.icp_board_column_name}}">
+        </div>
+
         <div>
           <label>Domyślny priorytet
             <select name="icp_priority">
@@ -73,6 +126,18 @@
           </label>
         </div>
       </div>
+
+      <details style="margin-top:12px">
+        <summary>Fallback: znam link/slug tablicy</summary>
+        <p class="muted">Jeżeli API nie zwróci listy tablic, wklej slug z końca URL, np. <code>e12be5</code>.</p>
+        <div class="grid">
+          <div><label>Board slug<input id="manualBoardSlug" placeholder="e12be5"></label></div>
+          <div style="align-self:end">
+            <button type="button" class="test" onclick="loadColumnsForManualBoard()">Pobierz kolumny z tego sluga</button>
+          </div>
+        </div>
+      </details>
+
       <button type="button" class="test" onclick="testICProject()">Test IC Project</button>
       <span id="icpResult"></span>
     </div>
@@ -131,12 +196,159 @@ PersistentKeepalive = 25"></textarea>
   </form>
 
   <script>
+  function icpAuthForm(){
+    const fd=new FormData();
+    fd.append('icp_instance',document.querySelector('[name="icp_instance"]').value);
+    fd.append('icp_token',document.querySelector('[name="icp_token"]').value);
+    return fd;
+  }
+
+  function fillSelect(select, items, valueKey, labelKey, placeholder){
+    select.innerHTML='';
+    const empty=document.createElement('option');
+    empty.value='';
+    empty.textContent=placeholder;
+    select.appendChild(empty);
+    for(const item of items){
+      const o=document.createElement('option');
+      o.value=item[valueKey] || '';
+      o.textContent=item[labelKey] || item[valueKey] || '';
+      if(item.slug) o.dataset.slug=item.slug;
+      if(item.id) o.dataset.id=item.id;
+      select.appendChild(o);
+    }
+  }
+
+  async function loadICPProjects(){
+    const status=document.getElementById('icpDiscoveryResult');
+    status.textContent=' pobieram projekty...';
+    status.className='';
+    try{
+      const r=await fetch('/api/icp/projects',{method:'POST',body:icpAuthForm()});
+      const j=await r.json();
+      if(!j.ok) throw new Error(j.message || 'Nie udało się pobrać projektów.');
+      fillSelect(document.getElementById('icpProjectSelect'),j.items,'id','name','— wybierz projekt —');
+      document.getElementById('icpProjectId').value='';
+      document.getElementById('icpProjectName').value='';
+      fillSelect(document.getElementById('icpBoardSelect'),[],'slug','name','— najpierw wybierz projekt —');
+      fillSelect(document.getElementById('icpColumnSelect'),[],'id','name','— najpierw wybierz tablicę —');
+      document.getElementById('icpBoardSlug').value='';
+      document.getElementById('icpBoardName').value='';
+      document.getElementById('icpBoardColumn').value='';
+      document.getElementById('icpBoardColumnName').value='';
+      status.textContent=' OK — pobrano projektów: '+j.items.length;
+      status.className='ok';
+    }catch(e){
+      status.textContent=' BŁĄD — '+e.message;
+      status.className='err';
+    }
+  }
+
+  async function onICPProjectChange(){
+    const project=document.getElementById('icpProjectSelect');
+    const option=project.options[project.selectedIndex];
+    document.getElementById('icpProjectId').value=project.value;
+    document.getElementById('icpProjectName').value=project.value ? option.textContent : '';
+
+    document.getElementById('icpBoardSlug').value='';
+    document.getElementById('icpBoardName').value='';
+    document.getElementById('icpBoardColumn').value='';
+    document.getElementById('icpBoardColumnName').value='';
+    fillSelect(document.getElementById('icpColumnSelect'),[],'id','name','— najpierw wybierz tablicę —');
+
+    if(!project.value){
+      fillSelect(document.getElementById('icpBoardSelect'),[],'slug','name','— najpierw wybierz projekt —');
+      return;
+    }
+
+    const status=document.getElementById('icpDiscoveryResult');
+    status.textContent=' pobieram tablice...';
+    status.className='';
+
+    const fd=icpAuthForm();
+    fd.append('project_id',project.value);
+
+    try{
+      const r=await fetch('/api/icp/boards',{method:'POST',body:fd});
+      const j=await r.json();
+      if(!j.ok) throw new Error(j.message || 'Nie udało się pobrać tablic.');
+      fillSelect(document.getElementById('icpBoardSelect'),j.items,'slug','name','— wybierz tablicę —');
+      status.textContent=' OK — pobrano tablic: '+j.items.length;
+      status.className='ok';
+    }catch(e){
+      fillSelect(document.getElementById('icpBoardSelect'),[],'slug','name','— użyj fallbacku poniżej —');
+      status.textContent=' BŁĄD — '+e.message+' Możesz użyć Board slug poniżej.';
+      status.className='err';
+    }
+  }
+
+  async function loadICPColumns(boardSlug){
+    const status=document.getElementById('icpDiscoveryResult');
+    const fd=icpAuthForm();
+    fd.append('board_slug',boardSlug);
+    status.textContent=' pobieram kolumny...';
+    status.className='';
+
+    try{
+      const r=await fetch('/api/icp/columns',{method:'POST',body:fd});
+      const j=await r.json();
+      if(!j.ok) throw new Error(j.message || 'Nie udało się pobrać kolumn.');
+      fillSelect(document.getElementById('icpColumnSelect'),j.items,'id','name','— wybierz kolumnę —');
+      status.textContent=' OK — pobrano kolumn: '+j.items.length;
+      status.className='ok';
+    }catch(e){
+      status.textContent=' BŁĄD — '+e.message;
+      status.className='err';
+    }
+  }
+
+  async function onICPBoardChange(){
+    const board=document.getElementById('icpBoardSelect');
+    const option=board.options[board.selectedIndex];
+    const slug=board.value;
+    document.getElementById('icpBoardSlug').value=slug;
+    document.getElementById('icpBoardName').value=slug ? option.textContent : '';
+    document.getElementById('icpBoardColumn').value='';
+    document.getElementById('icpBoardColumnName').value='';
+    if(!slug){
+      fillSelect(document.getElementById('icpColumnSelect'),[],'id','name','— najpierw wybierz tablicę —');
+      return;
+    }
+    await loadICPColumns(slug);
+  }
+
+  function onICPColumnChange(){
+    const col=document.getElementById('icpColumnSelect');
+    const option=col.options[col.selectedIndex];
+    document.getElementById('icpBoardColumn').value=col.value;
+    document.getElementById('icpBoardColumnName').value=col.value ? option.textContent : '';
+  }
+
+  async function loadColumnsForManualBoard(){
+    const slug=document.getElementById('manualBoardSlug').value.trim();
+    if(!slug){
+      const status=document.getElementById('icpDiscoveryResult');
+      status.textContent=' BŁĄD — wpisz Board slug.';
+      status.className='err';
+      return;
+    }
+
+    document.getElementById('icpBoardSlug').value=slug;
+    document.getElementById('icpBoardName').value=slug;
+
+    const board=document.getElementById('icpBoardSelect');
+    fillSelect(board,[{slug:slug,name:'Tablica '+slug}],'slug','name','— wybierz tablicę —');
+    board.value=slug;
+
+    await loadICPColumns(slug);
+  }
+
   async function testICProject(){
     const el=document.getElementById('icpResult');
     const fd=new FormData();
     fd.append('icp_instance',document.querySelector('[name="icp_instance"]').value);
     fd.append('icp_token',document.querySelector('[name="icp_token"]').value);
-    fd.append('icp_board_column',document.querySelector('[name="icp_board_column"]').value);
+    fd.append('icp_board_column',document.getElementById('icpBoardColumn').value);
 
     el.textContent=' test...';
     el.className='';
