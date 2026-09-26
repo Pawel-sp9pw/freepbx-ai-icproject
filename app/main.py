@@ -308,14 +308,70 @@ async def icp_columns(
 @app.post("/api/test/ollama")
 async def test_ollama():
     s = load_settings()
+    base_url = s["ollama_url"].rstrip("/")
+    configured_model = s.get("ollama_model", "")
+
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{s['ollama_url'].rstrip('/')}/api/tags")
-            r.raise_for_status()
-            models = [x.get("name") for x in r.json().get("models", [])]
-        return {"ok": True, "models": models}
+        async with httpx.AsyncClient(timeout=30) as client:
+            tags = await client.get(f"{base_url}/api/tags")
+            tags.raise_for_status()
+            installed_models = [
+                x.get("name")
+                for x in tags.json().get("models", [])
+                if x.get("name")
+            ]
+
+            installed = any(
+                name == configured_model
+                or name.split(":")[0] == configured_model.split(":")[0]
+                and configured_model in name
+                for name in installed_models
+            )
+
+            if not configured_model:
+                return {
+                    "ok": False,
+                    "configured_model": "",
+                    "installed": False,
+                    "models": installed_models,
+                    "message": "Brak skonfigurowanego modelu Ollama.",
+                }
+
+            if not installed:
+                return {
+                    "ok": False,
+                    "configured_model": configured_model,
+                    "installed": False,
+                    "models": installed_models,
+                    "message": f"Model {configured_model} jest ustawiony, ale nie jest jeszcze zainstalowany.",
+                }
+
+            test = await client.post(
+                f"{base_url}/api/generate",
+                json={
+                    "model": configured_model,
+                    "prompt": "Odpowiedz wyłącznie słowem OK.",
+                    "stream": False,
+                    "options": {"num_predict": 8},
+                },
+            )
+            test.raise_for_status()
+            response_text = (test.json().get("response") or "").strip()
+
+        return {
+            "ok": True,
+            "configured_model": configured_model,
+            "installed": True,
+            "models": installed_models,
+            "response": response_text,
+            "message": f"Model {configured_model} odpowiada poprawnie.",
+        }
     except Exception as e:
-        return {"ok": False, "message": str(e)}
+        return {
+            "ok": False,
+            "configured_model": configured_model,
+            "message": str(e),
+        }
 
 @app.post("/api/test/piper")
 async def test_piper():
