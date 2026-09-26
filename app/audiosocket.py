@@ -199,7 +199,7 @@ class CallSession:
             f"Problem: {description}."
         )
         await asyncio.sleep(0.35)
-        await self.say("Czy dane są poprawne? Proszę powiedzieć tak lub nie.")
+        await self.say("Proszę powiedzieć tak, jeśli dane są poprawne, albo nie, jeśli wymagają poprawy.")
 
     async def finalize_ticket(self):
         ticket = dict(self.ticket_data)
@@ -431,7 +431,7 @@ class CallSession:
                 self.confirmation_misses = 0
                 await self.say(
                     "Nie rozpoznałem jednoznacznej odpowiedzi. "
-                    "Proszę powiedzieć tylko: tak albo nie."
+                    "Proszę powiedzieć tylko tak albo nie."
                 )
             return
 
