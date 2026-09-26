@@ -223,17 +223,19 @@ class CallSession:
             )
             created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
             ticket_no = created.get("number") or created.get("shortCode") or ""
-            suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
             self.ticket_ref = str(ticket_no or created.get("id") or "")
             self.final_status = "completed_uncertain" if uncertain else "completed"
             if uncertain:
                 await self.say(
-                    "Dziękuję. Zgłoszenie zostało przyjęte." + suffix +
-                    " Nie udało mi się dokładnie rozpoznać wszystkich poprawek. "
+                    "Dziękuję. Zgłoszenie zostało przyjęte. "
+                    "Nie udało mi się dokładnie rozpoznać wszystkich poprawek. "
                     "Ktoś z serwisu skontaktuje się w celu doprecyzowania. Do widzenia."
                 )
             else:
-                await self.say("Dziękuję. Zgłoszenie zostało zapisane." + suffix + " Do widzenia.")
+                await self.say(
+                    "Dziękuję. Zgłoszenie zostało zapisane. "
+                    "Ktoś z serwisu skontaktuje się w tej sprawie. Do widzenia."
+                )
             self.closed = True
             await asyncio.sleep(0.3)
             self.writer.close()
