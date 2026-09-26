@@ -28,6 +28,9 @@ app = FastAPI(title="FreePBX AI → IC Project")
 ADMIN_PASSWORD_FILE = Path("/etc/freepbx-ai/admin-password")
 UPDATE_STATE_FILE = Path("/var/lib/freepbx-ai/update.state")
 UPDATE_LOG_FILE = Path("/var/lib/freepbx-ai/update.log")
+MODEL_PULL_STATE_FILE = Path("/var/lib/freepbx-ai/model-pull.state")
+MODEL_PULL_LOG_FILE = Path("/var/lib/freepbx-ai/model-pull.log")
+MODEL_PULL_MODEL_FILE = Path("/var/lib/freepbx-ai/model-pull.model")
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
@@ -165,17 +168,23 @@ async def performance_profile(profile: str = Form(...)):
         }
 
     safe_model = selected["ollama_model"].replace(":", "-").replace(".", "-")
-    unit = f"freepbx-ai-model-pull-{safe_model}-{int(time.time())}"
+    unit = f"freepbx-ai-model-pull-{safe_model}"
 
     try:
+        subprocess.run(
+            ["systemctl", "stop", unit],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         pull = subprocess.run(
             [
                 "systemd-run",
                 f"--unit={unit}",
                 "--collect",
                 "--property=Type=exec",
-                ollama_bin,
-                "pull",
+                "/bin/bash",
+                "/opt/freepbx-ai-icproject/scripts/pull-model.sh",
                 selected["ollama_model"],
             ],
             capture_output=True,
@@ -337,6 +346,11 @@ async def ollama_model_status():
     s = load_settings()
     base_url = s["ollama_url"].rstrip("/")
     configured_model = s.get("ollama_model", "")
+
+    state = MODEL_PULL_STATE_FILE.read_text().strip() if MODEL_PULL_STATE_FILE.exists() else "idle"
+    pulling_model = MODEL_PULL_MODEL_FILE.read_text().strip() if MODEL_PULL_MODEL_FILE.exists() else ""
+    pull_log = MODEL_PULL_LOG_FILE.read_text(errors="replace")[-8000:] if MODEL_PULL_LOG_FILE.exists() else ""
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f"{base_url}/api/tags")
@@ -347,17 +361,26 @@ async def ollama_model_status():
                 if x.get("name")
             ]
         installed = configured_model in models
+        if installed and pulling_model == configured_model and state == "running":
+            state = "success"
+
         return {
             "ok": True,
             "configured_model": configured_model,
             "installed": installed,
             "models": models,
+            "pull_state": state,
+            "pulling_model": pulling_model,
+            "pull_log": pull_log,
         }
     except Exception as e:
         return {
             "ok": False,
             "configured_model": configured_model,
             "installed": False,
+            "pull_state": state,
+            "pulling_model": pulling_model,
+            "pull_log": pull_log,
             "message": str(e),
         }
 
