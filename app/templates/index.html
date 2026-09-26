@@ -165,6 +165,8 @@
         </div>
       </div>
       <div id="performanceProfileResult" class="muted" style="margin-top:8px"></div>
+      <div id="modelPullStatus" class="muted" style="margin-top:6px"></div>
+      <pre id="modelPullLog" style="display:none;max-height:220px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
     </div>
 
     <div class="card">
@@ -620,6 +622,44 @@ PersistentKeepalive = 25"></textarea>
     }catch(e){}
   }
 
+  async function refreshModelPullStatus(){
+    const status=document.getElementById('modelPullStatus');
+    const log=document.getElementById('modelPullLog');
+    if(!status || !log) return;
+    try{
+      const r=await fetch('/api/ollama/model-status',{cache:'no-store'});
+      const j=await r.json();
+      if(!j.ok){
+        status.textContent=' status modelu niedostępny: '+(j.message || 'błąd');
+        status.className='err';
+        return;
+      }
+
+      if(j.installed){
+        status.textContent=' Model '+j.configured_model+' jest zainstalowany.';
+        status.className='ok';
+      }else if(j.pull_state==='running' && j.pulling_model===j.configured_model){
+        status.textContent=' Pobieranie '+j.configured_model+' trwa...';
+        status.className='warn';
+      }else if((j.pull_state || '').startsWith('error') && j.pulling_model===j.configured_model){
+        status.textContent=' Pobieranie '+j.configured_model+' zakończyło się błędem.';
+        status.className='err';
+      }else{
+        status.textContent=' Model '+j.configured_model+' nie jest zainstalowany.';
+        status.className='err';
+      }
+
+      if(j.pull_log){
+        log.style.display='block';
+        log.textContent=j.pull_log;
+        log.scrollTop=log.scrollHeight;
+      }
+    }catch(e){
+      status.textContent=' BŁĄD statusu modelu — '+e;
+      status.className='err';
+    }
+  }
+
   async function applyPerformanceProfile(profile){
     const el=document.getElementById('performanceProfileResult');
     const fd=new FormData();
@@ -640,6 +680,7 @@ PersistentKeepalive = 25"></textarea>
       if(compute) compute.value=j.whisper_compute_type;
       el.textContent=' OK — '+j.message;
       el.className='ok';
+      setTimeout(refreshModelPullStatus,500);
     }catch(e){
       el.textContent=' BŁĄD — '+e.message;
       el.className='err';
@@ -826,8 +867,8 @@ PersistentKeepalive = 25"></textarea>
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
 
-  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshResourceHistory();},200);
-  setInterval(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();},5000);
+  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshResourceHistory();refreshModelPullStatus();},200);
+  setInterval(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshModelPullStatus();},5000);
   setInterval(()=>{refreshResourceHistory();},30000);
 
   async function changePassword(){
