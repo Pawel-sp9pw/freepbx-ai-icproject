@@ -206,6 +206,10 @@
       <div class="muted">
         Token służy wyłącznie do przekazania UUID i numeru dzwoniącego z Asteriska do agenta.
       </div>
+      <div style="margin-top:8px">
+        <button type="button" class="test" onclick="refreshCallerIdStatus()">Sprawdź ostatni CallerID</button>
+        <span id="callerIdStatus" class="muted"></span>
+      </div>
       <label>Przykład do <code>extensions_custom.conf</code>
         <textarea readonly style="min-height:170px">[ai-icproject]
 exten => s,1,NoOp(AI IC Project Agent)
@@ -653,6 +657,26 @@ PersistentKeepalive = 25"></textarea>
       const j=await r.json();
       renderHistoryChart(j.items || []);
     }catch(e){}
+  }
+
+  async function refreshCallerIdStatus(){
+    const el=document.getElementById('callerIdStatus');
+    if(!el) return;
+    try{
+      const r=await fetch('/api/call/last',{cache:'no-store'});
+      const j=await r.json();
+      if(!j.registered){
+        el.textContent=' Brak odebranego CallerID od FreePBX.';
+        el.className='err';
+        return;
+      }
+      const when=j.ts ? new Date(j.ts*1000).toLocaleString() : '';
+      el.textContent=' Ostatni numer: '+(j.caller || '(pusty)')+' · UUID: '+(j.uuid || '')+(when ? ' · '+when : '');
+      el.className=(j.caller ? 'ok' : 'err');
+    }catch(e){
+      el.textContent=' Błąd odczytu statusu CallerID: '+e;
+      el.className='err';
+    }
   }
 
   async function refreshModelPullStatus(){
