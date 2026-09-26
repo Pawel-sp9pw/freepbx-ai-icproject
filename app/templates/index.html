@@ -73,7 +73,7 @@
           </label>
         </div>
       </div>
-      <button type="button" class="test" onclick="testApi('/api/test/icp','icpResult')">Test IC Project</button>
+      <button type="button" class="test" onclick="testICProject()">Test IC Project</button>
       <span id="icpResult"></span>
     </div>
 
@@ -131,6 +131,26 @@ PersistentKeepalive = 25"></textarea>
   </form>
 
   <script>
+  async function testICProject(){
+    const el=document.getElementById('icpResult');
+    const fd=new FormData();
+    fd.append('icp_instance',document.querySelector('[name="icp_instance"]').value);
+    fd.append('icp_token',document.querySelector('[name="icp_token"]').value);
+    fd.append('icp_board_column',document.querySelector('[name="icp_board_column"]').value);
+
+    el.textContent=' test...';
+    el.className='';
+    try{
+      const r=await fetch('/api/test/icp',{method:'POST',body:fd});
+      const j=await r.json();
+      el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.message?' — '+j.message:'');
+      el.className=j.ok?'ok':'err';
+    }catch(e){
+      el.textContent=' BŁĄD — '+e;
+      el.className='err';
+    }
+  }
+
   async function testApi(url,id,method='POST'){
     const el=document.getElementById(id); el.textContent=' test...'; el.className='';
     try{
