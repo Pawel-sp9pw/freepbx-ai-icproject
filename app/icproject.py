@@ -54,72 +54,11 @@ class ICProjectClient:
             if p.get("id")
         ]
 
-    async def list_boards(self, project_id: str):
-        """Return boards visible for a project.
-
-        IC Project API deployments have exposed board filtering in more than one
-        form over time, so try the collection endpoint first and keep a fallback
-        to a project-scoped route. Only successful JSON list responses are used.
-        """
-        self._check_auth()
-        if not project_id:
-            raise RuntimeError("Brak ID projektu.")
-
-        candidates = [
-            (f"{self.base_url}/project/boards", {"pagination": 0, "project": project_id}),
-            (f"{self.base_url}/project/boards", {"pagination": 0, "projectId": project_id}),
-            (f"{self.base_url}/project/projects/{project_id}/boards", {"pagination": 0}),
-        ]
-
-        last_error = ""
-        async with httpx.AsyncClient(timeout=20) as client:
-            for url, params in candidates:
-                try:
-                    r = await client.get(url, headers=self.headers, params=params)
-                    if not r.is_success:
-                        last_error = f"HTTP {r.status_code}: {r.text[:200]}"
-                        continue
-                    data = r.json()
-                    if isinstance(data, dict):
-                        data = data.get("hydra:member") or data.get("items") or data.get("data") or []
-                    if not isinstance(data, list):
-                        continue
-
-                    boards = []
-                    for b in data:
-                        if not isinstance(b, dict):
-                            continue
-                        # Defensive filtering in case the API ignores project filter.
-                        bid_project = b.get("projectId")
-                        if not bid_project and isinstance(b.get("project"), dict):
-                            bid_project = (b.get("project") or {}).get("id")
-                        if bid_project and bid_project != project_id:
-                            continue
-
-                        slug = (
-                            b.get("shortCode")
-                            or b.get("slug")
-                            or b.get("shortcode")
-                            or ""
-                        )
-                        boards.append({
-                            "id": b.get("id", ""),
-                            "name": b.get("name") or slug or b.get("id", ""),
-                            "slug": slug,
-                        })
-                    if boards:
-                        return boards
-                except Exception as e:
-                    last_error = str(e)
-
-        raise RuntimeError(
-            "Nie udało się pobrać tablic dla projektu. "
-            + (last_error or "API nie zwróciło listy tablic.")
-        )
-
     async def resolve_board(self, board_slug: str):
         self._check_auth()
-        board_slug = board_slug.strip()
+        board_slug = board_slug.strip().rstrip("/")
+        if board_slug.startswith("http://") or board_slug.startswith("https://"):
+            board_slug = board_slug.split("/")[-1]
         if not board_slug:
             raise RuntimeError("Brak identyfikatora tablicy.")
 
