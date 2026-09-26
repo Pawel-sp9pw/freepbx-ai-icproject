@@ -4,6 +4,7 @@ import base64
 import secrets
 import subprocess
 import shutil
+import time
 from pathlib import Path
 
 import httpx
@@ -156,13 +157,23 @@ async def performance_profile(profile: str = Form(...)):
     save_settings(selected)
 
     ollama_bin = shutil.which("ollama")
-    if ollama_bin:
-        unit = f"freepbx-ai-model-pull-{profile}"
-        subprocess.run(
+    if not ollama_bin:
+        return {
+            "ok": False,
+            "message": "Profil zapisano, ale nie znaleziono polecenia ollama.",
+            **selected,
+        }
+
+    safe_model = selected["ollama_model"].replace(":", "-").replace(".", "-")
+    unit = f"freepbx-ai-model-pull-{safe_model}-{int(time.time())}"
+
+    try:
+        pull = subprocess.run(
             [
                 "systemd-run",
                 f"--unit={unit}",
                 "--collect",
+                "--property=Type=exec",
                 ollama_bin,
                 "pull",
                 selected["ollama_model"],
@@ -171,10 +182,26 @@ async def performance_profile(profile: str = Form(...)):
             text=True,
             timeout=10,
         )
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"Profil zapisano, ale nie udało się uruchomić pobierania modelu: {e}",
+            **selected,
+        }
+
+    if pull.returncode != 0:
+        detail = (pull.stderr or pull.stdout or "").strip()
+        return {
+            "ok": False,
+            "message": "Profil zapisano, ale uruchomienie pobierania modelu nie powiodło się"
+                       + (f": {detail}" if detail else "."),
+            **selected,
+        }
 
     return {
         "ok": True,
-        "message": "Profil zapisany. Model Ollama jest pobierany w tle, jeśli nie był jeszcze dostępny.",
+        "message": f"Profil zapisany. Pobieranie {selected['ollama_model']} uruchomione w tle.",
+        "pull_unit": unit,
         **selected,
     }
 
@@ -303,6 +330,36 @@ async def icp_columns(
         return {"ok": True, "items": await client.list_board_columns(board_slug)}
     except Exception as e:
         return {"ok": False, "message": str(e), "items": []}
+
+
+@app.get("/api/ollama/model-status")
+async def ollama_model_status():
+    s = load_settings()
+    base_url = s["ollama_url"].rstrip("/")
+    configured_model = s.get("ollama_model", "")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{base_url}/api/tags")
+            r.raise_for_status()
+            models = [
+                x.get("name")
+                for x in r.json().get("models", [])
+                if x.get("name")
+            ]
+        installed = configured_model in models
+        return {
+            "ok": True,
+            "configured_model": configured_model,
+            "installed": installed,
+            "models": models,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "configured_model": configured_model,
+            "installed": False,
+            "message": str(e),
+        }
 
 
 @app.post("/api/test/ollama")
