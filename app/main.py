@@ -99,6 +99,13 @@ async def register_call_metadata(uuid: str, caller: str = "", token: str = ""):
     register_caller(call_id, caller_digits)
     return {"ok": True, "uuid": call_id, "caller": caller_digits}
 
+@app.post("/api/call/token/rotate")
+async def rotate_callerid_token():
+    key = secrets.token_urlsafe(24)
+    save_settings({"callerid_api_key": key})
+    return {"ok": True, "callerid_api_key": key}
+
+
 @app.get("/api/call/last")
 async def last_call_metadata():
     item = last_registration()
