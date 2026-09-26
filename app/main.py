@@ -161,15 +161,23 @@ async def update_start():
 
 @app.get("/api/dashboard/status")
 async def dashboard_status():
-    rt = runtime_status()
-    rt["services"] = service_status()
-    rt["resources"] = linux_resource_status()
+    # Monitoring contains psutil/subprocess/SQLite work. Run it outside the
+    # asyncio event loop because the same loop is responsible for pacing
+    # AudioSocket audio frames every 20 ms.
+    rt, services, resources = await asyncio.gather(
+        asyncio.to_thread(runtime_status),
+        asyncio.to_thread(service_status),
+        asyncio.to_thread(linux_resource_status),
+    )
+    rt["services"] = services
+    rt["resources"] = resources
     return rt
 
 
 @app.get("/api/resources/history")
 async def resources_history(hours: int = 24):
-    return {"items": resource_history(hours)}
+    items = await asyncio.to_thread(resource_history, hours)
+    return {"items": items}
 
 
 @app.post("/api/performance/profile")
@@ -258,12 +266,13 @@ async def performance_profile(profile: str = Form(...)):
 
 @app.get("/api/calls")
 async def calls(limit: int = 30):
-    return {"items": list_calls(limit)}
+    items = await asyncio.to_thread(list_calls, limit)
+    return {"items": items}
 
 
 @app.get("/api/calls/{call_id}")
 async def call_details(call_id: str):
-    item = get_call(call_id)
+    item = await asyncio.to_thread(get_call, call_id)
     if not item:
         raise HTTPException(status_code=404, detail="Rozmowa nie istnieje.")
     return item
