@@ -493,7 +493,8 @@ PersistentKeepalive = 25"></textarea>
         ' · koniec: '+esc(formatDate(c.ended_at))+
         ' · status: '+esc(c.status || '—')+
         (c.ticket_ref ? ' · zgłoszenie: '+esc(c.ticket_ref) : '')+
-        '</div>';
+        '</div>'+
+        (c.error ? '<div class="err" style="margin-top:8px"><strong>Błąd:</strong> '+esc(c.error)+'</div>' : '');
       for(const m of (c.messages || [])){
         const cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'');
         const who=m.role==='user'?'Klient':(m.role==='assistant'?'Agent':m.role);
