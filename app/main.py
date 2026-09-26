@@ -2,6 +2,7 @@ import asyncio
 import logging
 import base64
 import secrets
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,8 @@ logging.basicConfig(
 app = FastAPI(title="FreePBX AI → IC Project")
 
 ADMIN_PASSWORD_FILE = Path("/etc/freepbx-ai/admin-password")
+UPDATE_STATE_FILE = Path("/var/lib/freepbx-ai/update.state")
+UPDATE_LOG_FILE = Path("/var/lib/freepbx-ai/update.log")
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
@@ -64,6 +67,50 @@ async def startup():
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/update/status")
+async def update_status():
+    state = UPDATE_STATE_FILE.read_text().strip() if UPDATE_STATE_FILE.exists() else "idle"
+    log = UPDATE_LOG_FILE.read_text(errors="replace")[-12000:] if UPDATE_LOG_FILE.exists() else ""
+    return {"state": state, "log": log}
+
+
+@app.post("/api/update/start")
+async def update_start():
+    try:
+        check = subprocess.run(
+            ["systemctl", "is-active", "freepbx-ai-update.service"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if check.stdout.strip() == "active":
+            return {"ok": False, "message": "Aktualizacja już trwa."}
+
+        UPDATE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        UPDATE_STATE_FILE.write_text("starting\n")
+        UPDATE_LOG_FILE.write_text("Uruchamianie aktualizacji...\n")
+
+        p = subprocess.run(
+            [
+                "systemd-run",
+                "--unit=freepbx-ai-update",
+                "--collect",
+                "/bin/bash",
+                "/opt/freepbx-ai-icproject/scripts/update-agent.sh",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if p.returncode != 0:
+            UPDATE_STATE_FILE.write_text(f"error:{p.returncode}\n")
+            return {"ok": False, "message": (p.stderr or p.stdout).strip()}
+
+        return {"ok": True, "message": "Aktualizacja uruchomiona w tle."}
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
 
 
 @app.get("/api/dashboard/status")
