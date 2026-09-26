@@ -112,8 +112,22 @@ def match_customer(company: str, contact: str, directory: list):
     # Phone match is strongest and can repair a badly recognized company name.
     if contact_digits:
         for item in directory:
-            phone = item.get("phone", "")
-            if phone and (contact_digits == phone or contact_digits.endswith(phone[-9:]) or phone.endswith(contact_digits[-9:])):
+            phone = re.sub(r"\D", "", item.get("phone", "") or "")
+            if not phone:
+                continue
+            # Exact match is always allowed. Suffix matching is only safe for
+            # normal telephone numbers; never match a 2-8 digit directory entry
+            # against the tail of another caller number.
+            exact = contact_digits == phone
+            suffix = (
+                len(contact_digits) >= 9
+                and len(phone) >= 9
+                and (
+                    contact_digits.endswith(phone[-9:])
+                    or phone.endswith(contact_digits[-9:])
+                )
+            )
+            if exact or suffix:
                 return item, 1.0
 
     source = normalize_company(company)
