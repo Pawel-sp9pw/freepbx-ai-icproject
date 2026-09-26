@@ -12,7 +12,7 @@ import webrtcvad
 from .config import load_settings, decrypt_secret
 from .stt import transcribe_pcm16
 from .tts import synthesize_pcm8k
-from .llm import ask_ollama, interpret_turn
+from .llm import ask_ollama, interpret_turn, looks_like_prompt_injection
 from .icproject import ICProjectClient
 from .monitoring import call_started, add_message, finish_call
 from .call_registry import consume_caller
@@ -266,6 +266,30 @@ class CallSession:
             log.exception("[%s] LLM fallback error", self.call_id)
             return {"intent": "unknown", "company": "", "contact": "", "description": ""}
 
+    async def refuse_out_of_scope(self):
+        if self.confirmation_pending:
+            await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę powiedzieć tak albo nie.")
+        elif self.awaiting_correction:
+            if self.correction_field == "company":
+                await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę podać poprawną nazwę firmy.")
+            elif self.correction_field == "contact":
+                await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę podać poprawny numer telefonu.")
+            elif self.correction_field == "description":
+                await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę podać poprawny opis problemu.")
+            else:
+                await self.say(
+                    "Mogę obsłużyć tylko bieżące zgłoszenie. "
+                    "Proszę wskazać: nazwa firmy, numer kontaktowy albo opis problemu."
+                )
+        elif self.awaiting_company:
+            await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę podać nazwę firmy.")
+        elif self.awaiting_contact:
+            await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę podać numer telefonu kontaktowego.")
+        elif self.awaiting_problem:
+            await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę opisać problem.")
+        else:
+            await self.say("Mogę pomóc wyłącznie w rejestracji bieżącego zgłoszenia serwisowego.")
+
     async def start(self):
         company = str(self.ticket_data.get("company", "") or "").strip()
         contact = str(self.ticket_data.get("contact", "") or "").strip()
@@ -408,6 +432,14 @@ class CallSession:
         self.history.append({"role": "user", "content": text})
 
         normalized = " ".join(text.lower().strip(" .,!?:;").split())
+
+        # Treat obvious attempts to alter the agent's rules as untrusted content.
+        # They never reach field assignment, confirmation or the general LLM path.
+        if looks_like_prompt_injection(text):
+            log.warning("[%s] Blocked prompt-injection-like utterance: %s", self.call_id, text[:300])
+            await self.refuse_out_of_scope()
+            return
+
         goodbye_phrases = (
             "do widzenia",
             "dziękuję do widzenia",
@@ -470,6 +502,9 @@ class CallSession:
             # LLM may help detect a correction/negative intent, but it is not
             # allowed to turn an unclear transcript into a positive confirmation.
             interpreted = await self.interpret_fallback("potwierdzenie danych tak/nie", text)
+            if interpreted.get("blocked"):
+                await self.refuse_out_of_scope()
+                return
             intent = str(interpreted.get("intent", "")).lower()
 
             if intent in ("confirm_no", "correction"):
@@ -515,6 +550,9 @@ class CallSession:
                     "wybór pola do poprawy: firma, numer kontaktowy albo opis problemu",
                     text,
                 )
+                if interpreted.get("blocked"):
+                    await self.refuse_out_of_scope()
+                    return
                 intent = str(interpreted.get("intent", "")).lower()
                 if interpreted.get("company"):
                     self.correction_field = "company"
@@ -543,6 +581,9 @@ class CallSession:
                 phone = extract_phone_digits(text)
                 if not phone:
                     interpreted = await self.interpret_fallback("nowy numer telefonu kontaktowego", text)
+                    if interpreted.get("blocked"):
+                        await self.refuse_out_of_scope()
+                        return
                     phone = extract_phone_digits(str(interpreted.get("contact", "") or ""))
                 if not phone:
                     await self.say("Nie udało mi się rozpoznać numeru. Proszę podać go cyfra po cyfrze.")
@@ -589,6 +630,9 @@ class CallSession:
             )
             if looks_like_problem:
                 interpreted = await self.interpret_fallback("nazwa firmy", text)
+                if interpreted.get("blocked"):
+                    await self.refuse_out_of_scope()
+                    return
                 if interpreted.get("company"):
                     company_text = str(interpreted["company"]).strip()
                 if interpreted.get("contact") and not phone:
@@ -625,6 +669,9 @@ class CallSession:
             phone = extract_phone_digits(text)
             if not phone:
                 interpreted = await self.interpret_fallback("numer telefonu kontaktowego", text)
+                if interpreted.get("blocked"):
+                    await self.refuse_out_of_scope()
+                    return
                 phone = extract_phone_digits(str(interpreted.get("contact", "") or ""))
 
                 if not phone and interpreted.get("intent") == "problem" and interpreted.get("description"):
@@ -710,11 +757,18 @@ class CallSession:
         reply = result.get("reply") or "Dziękuję."
         ticket_update = result.get("ticket") or {}
 
-        # Merge only non-empty values so a small model cannot erase data from
-        # previous turns.
+        # General LLM fallback is fill-only. It may add a missing field but it
+        # may NEVER overwrite data already collected for this call. Replacements
+        # are allowed only in the explicit correction state above.
+        allowed_fill_keys = {"company", "contact", "title", "description"}
         for key, value in ticket_update.items():
-            if value not in (None, "", [], {}):
-                self.ticket_data[key] = value
+            if key not in allowed_fill_keys:
+                continue
+            if value in (None, "", [], {}):
+                continue
+            if self.ticket_data.get(key):
+                continue
+            self.ticket_data[key] = value
 
         # Normalize contact phone numbers recognized with spaces, commas or dashes.
         contact_value = str(self.ticket_data.get("contact", "") or "")
