@@ -64,6 +64,9 @@ class CallSession:
         self.silence_frames = 0
         self.turns = 0
         self.closed = False
+        self.ticket_data = {}
+        self.stt_misses = 0
+        self.last_question = ""
         self.final_status = "ended"
         self.ticket_ref = ""
         self.final_error = ""
@@ -127,19 +130,38 @@ class CallSession:
             return
 
         if not text:
-            await self.say("Nie dosłyszałem. Proszę powtórzyć.")
+            self.stt_misses += 1
+            # Do not speak on every noise/silence fragment. Ask for repetition
+            # only after two consecutive failed recognitions.
+            if self.stt_misses >= 2:
+                self.stt_misses = 0
+                await self.say("Nie dosłyszałem. Proszę powtórzyć.")
             return
+
+        self.stt_misses = 0
 
         log.info("[%s] STT: %s", self.call_id, text)
         add_message(self.call_id, "user", text)
         self.history.append({"role": "user", "content": text})
+
+        # Give the LLM an explicit snapshot of already collected data. This is
+        # more reliable with small local models than expecting them to reconstruct
+        # state only from previous JSON turns.
+        state_context = dict(self.ticket_data)
+        llm_history = list(self.history)
+        if state_context:
+            llm_history.append({
+                "role": "system",
+                "content": "Już zebrane dane zgłoszenia (zachowaj je): "
+                           + json.dumps(state_context, ensure_ascii=False),
+            })
 
         try:
             result = await ask_ollama(
                 self.settings["ollama_url"],
                 self.settings["ollama_model"],
                 self.settings["system_prompt"],
-                self.history,
+                llm_history,
             )
         except Exception:
             log.exception("[%s] LLM error", self.call_id)
@@ -147,10 +169,46 @@ class CallSession:
             return
 
         reply = result.get("reply") or "Dziękuję."
+        ticket_update = result.get("ticket") or {}
+
+        # Merge only non-empty values so a small model cannot erase data from
+        # previous turns.
+        for key, value in ticket_update.items():
+            if value not in (None, "", [], {}):
+                self.ticket_data[key] = value
+
+        # If we are clearly asking for a problem and the caller gives a real
+        # utterance, accept it as the description even if the LLM is too strict.
+        previous_agent = ""
+        for item in reversed(self.history[:-1]):
+            if item.get("role") == "assistant":
+                previous_agent = item.get("content", "")
+                break
+        problem_words = ("problem", "opis", "co się dzieje", "usterk")
+        if (
+            not self.ticket_data.get("description")
+            and len(text.strip()) >= 3
+            and any(word in previous_agent.lower() for word in problem_words)
+        ):
+            self.ticket_data["description"] = text.strip()
+
+        if self.ticket_data.get("description") and not self.ticket_data.get("title"):
+            desc = self.ticket_data["description"].strip()
+            self.ticket_data["title"] = desc[:80] or "Zgłoszenie telefoniczne"
+
+        result["ticket"] = dict(self.ticket_data)
+
+        company_ok = bool(str(self.ticket_data.get("company", "")).strip())
+        description_ok = bool(str(self.ticket_data.get("description", "")).strip())
+        if company_ok and description_ok:
+            result["done"] = True
+            if reply.lower().startswith("proszę podać opis problemu"):
+                reply = "Dziękuję, mam potrzebne informacje."
+
         self.history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
 
         if result.get("done"):
-            ticket = result.get("ticket") or {}
+            ticket = dict(self.ticket_data)
             try:
                 token = decrypt_secret(self.settings.get("icp_token_enc", ""))
                 client = ICProjectClient(
