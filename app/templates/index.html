@@ -116,6 +116,17 @@
   </div>
 
   <div class="card">
+    <h2>Testy regresyjne / bezpieczeństwa</h2>
+    <p class="muted">
+      Uruchamia lokalny zestaw testów bezpieczeństwa i logiki rozmowy.
+      Testy nie są uruchamiane podczas aktywnej rozmowy.
+    </p>
+    <button type="button" class="test" id="testsButton" onclick="startRegressionTests()">Uruchom testy</button>
+    <span id="testsStatus" class="muted">brak uruchomionych testów</span>
+    <pre id="testsLog" style="display:none;max-height:360px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
+  </div>
+
+  <div class="card">
     <h2>Rozmowy</h2>
     <p class="muted">Historia jest zapisywana lokalnie w SQLite od momentu instalacji tej wersji.</p>
     <div style="overflow-x:auto">
@@ -603,6 +614,81 @@ PersistentKeepalive = 25"></textarea>
     }
   }
 
+  async function refreshTestsStatus(){
+    const status=document.getElementById('testsStatus');
+    const button=document.getElementById('testsButton');
+    const log=document.getElementById('testsLog');
+    if(!status || !button || !log) return;
+
+    try{
+      const r=await fetch('/api/tests/status',{cache:'no-store'});
+      const j=await r.json();
+      const state=j.state || 'idle';
+
+      if(state==='running' || state==='starting'){
+        status.textContent=' testy trwają...';
+        status.className='warn';
+        button.disabled=true;
+      }else if(state==='success'){
+        status.textContent=' wszystkie testy zakończone pomyślnie';
+        status.className='ok';
+        button.disabled=false;
+      }else if(state.startsWith('error')){
+        status.textContent=' testy zakończone błędem';
+        status.className='err';
+        button.disabled=false;
+      }else{
+        status.textContent=' brak uruchomionych testów';
+        status.className='muted';
+        button.disabled=false;
+      }
+
+      if(j.log){
+        log.style.display='block';
+        log.textContent=j.log;
+        log.scrollTop=log.scrollHeight;
+      }
+    }catch(e){
+      status.textContent=' nie udało się pobrać statusu testów';
+      status.className='err';
+      button.disabled=false;
+    }
+  }
+
+  async function startRegressionTests(){
+    const status=document.getElementById('testsStatus');
+    const button=document.getElementById('testsButton');
+    button.disabled=true;
+    status.textContent=' uruchamianie...';
+    status.className='warn';
+
+    try{
+      const r=await fetch('/api/tests/start',{method:'POST'});
+      const j=await r.json();
+      if(!j.ok){
+        status.textContent=' BŁĄD — '+(j.message || 'nie udało się uruchomić testów');
+        status.className='err';
+        button.disabled=false;
+        return;
+      }
+
+      status.textContent=' testy uruchomione';
+      status.className='warn';
+
+      const poll=setInterval(async ()=>{
+        await refreshTestsStatus();
+        const text=document.getElementById('testsStatus').textContent || '';
+        if(text.includes('zakończone')){
+          clearInterval(poll);
+        }
+      },1000);
+    }catch(e){
+      status.textContent=' BŁĄD — '+e;
+      status.className='err';
+      button.disabled=false;
+    }
+  }
+
   async function refreshUpdateStatus(){
     const status=document.getElementById('updateStatus');
     const button=document.getElementById('updateButton');
@@ -1000,13 +1086,13 @@ PersistentKeepalive = 25"></textarea>
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
 
-  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshResourceHistory();refreshModelPullStatus();},200);
+  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshTestsStatus();refreshResourceHistory();refreshModelPullStatus();},200);
 
   // Rozmowy są lekkim endpointem i mogą być odświeżane prawie na żywo.
   setInterval(()=>{refreshCalls();},1000);
 
   // Cięższy monitoring pozostaje rzadszy, żeby nie wpływać na AudioSocket/TTS.
-  setInterval(()=>{refreshDashboard();refreshUpdateStatus();refreshModelPullStatus();},5000);
+  setInterval(()=>{refreshDashboard();refreshUpdateStatus();refreshTestsStatus();refreshModelPullStatus();},5000);
   setInterval(()=>{refreshResourceHistory();},30000);
 
   async function changePassword(){
