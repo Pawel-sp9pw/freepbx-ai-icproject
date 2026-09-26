@@ -769,7 +769,11 @@ PersistentKeepalive = 25"></textarea>
     const el=document.getElementById(id); el.textContent=' test...'; el.className='';
     try{
       const r=await fetch(url,{method:method}); const j=await r.json();
-      el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.message?' — '+j.message:'')+(j.models?' — '+j.models.join(', '):'');
+      let extra='';
+      if(j.configured_model) extra+=' · model: '+j.configured_model;
+      if(j.installed===false) extra+=' · niezainstalowany';
+      if(j.response) extra+=' · odpowiedź: '+j.response;
+      el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.message?' — '+j.message:'')+extra;
       el.className=j.ok?'ok':'err';
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
