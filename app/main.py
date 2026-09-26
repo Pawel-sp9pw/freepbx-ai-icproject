@@ -17,7 +17,7 @@ from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
 from .monitoring import init_db, runtime_status, service_status, linux_resource_status, resource_history, list_calls, get_call
-from .call_registry import register_caller
+from .call_registry import register_caller, last_registration
 
 logging.basicConfig(
     level=logging.INFO,
@@ -98,6 +98,14 @@ async def register_call_metadata(uuid: str, caller: str = "", token: str = ""):
     caller_digits = "".join(ch for ch in str(caller or "") if ch.isdigit())
     register_caller(call_id, caller_digits)
     return {"ok": True, "uuid": call_id, "caller": caller_digits}
+
+@app.get("/api/call/last")
+async def last_call_metadata():
+    item = last_registration()
+    if not item:
+        return {"ok": True, "registered": False}
+    return {"ok": True, "registered": True, **item}
+
 
 
 @app.get("/api/update/status")
