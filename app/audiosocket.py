@@ -152,6 +152,7 @@ class CallSession:
         self.customer_directory = parse_customer_directory(self.settings.get("customer_directory", ""))
         self.confirmation_pending = False
         self.awaiting_correction = False
+        self.correction_field = ""
         self.awaiting_company = False
         self.awaiting_contact = False
         self.awaiting_problem = False
@@ -394,6 +395,7 @@ class CallSession:
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 self.awaiting_correction = True
+                self.correction_field = ""
                 self.awaiting_company = False
                 self.awaiting_contact = False
                 self.awaiting_problem = False
@@ -426,6 +428,84 @@ class CallSession:
                     "Nie rozpoznałem jednoznacznej odpowiedzi. "
                     "Proszę powiedzieć tylko: tak albo nie."
                 )
+            return
+
+        # Two-step correction flow:
+        # 1) caller selects which field is wrong,
+        # 2) next utterance becomes the replacement value.
+        if self.awaiting_correction:
+            if not self.correction_field:
+                if any(x in normalized for x in ("firma", "nazwa firmy", "nazwa klienta")):
+                    self.correction_field = "company"
+                    await self.say("Proszę podać poprawną nazwę firmy.")
+                    return
+
+                if any(x in normalized for x in ("numer", "telefon", "kontakt", "numer kontaktowy")):
+                    self.correction_field = "contact"
+                    await self.say("Proszę podać poprawny numer telefonu kontaktowego.")
+                    return
+
+                if any(x in normalized for x in ("opis", "opis problemu", "problem")):
+                    self.correction_field = "description"
+                    await self.say("Proszę podać poprawny opis problemu.")
+                    return
+
+                interpreted = await self.interpret_fallback(
+                    "wybór pola do poprawy: firma, numer kontaktowy albo opis problemu",
+                    text,
+                )
+                intent = str(interpreted.get("intent", "")).lower()
+                if interpreted.get("company"):
+                    self.correction_field = "company"
+                    await self.say("Proszę podać poprawną nazwę firmy.")
+                    return
+                if interpreted.get("contact"):
+                    self.correction_field = "contact"
+                    await self.say("Proszę podać poprawny numer telefonu kontaktowego.")
+                    return
+                if interpreted.get("description") or intent == "problem":
+                    self.correction_field = "description"
+                    await self.say("Proszę podać poprawny opis problemu.")
+                    return
+
+                await self.say(
+                    "Proszę powiedzieć, co mam poprawić: nazwę firmy, numer kontaktowy albo opis problemu."
+                )
+                return
+
+            if self.correction_field == "company":
+                company_text = company_without_phone(text) or text.strip()
+                matched_customer, _ = match_customer(company_text, "", self.customer_directory)
+                self.ticket_data["company"] = matched_customer["name"] if matched_customer else company_text
+
+            elif self.correction_field == "contact":
+                phone = extract_phone_digits(text)
+                if not phone:
+                    interpreted = await self.interpret_fallback("nowy numer telefonu kontaktowego", text)
+                    phone = extract_phone_digits(str(interpreted.get("contact", "") or ""))
+                if not phone:
+                    await self.say("Nie udało mi się rozpoznać numeru. Proszę podać go cyfra po cyfrze.")
+                    return
+                self.ticket_data["contact"] = phone
+                matched_customer, _ = match_customer(
+                    str(self.ticket_data.get("company", "") or ""),
+                    phone,
+                    self.customer_directory,
+                )
+                if matched_customer:
+                    self.ticket_data["company"] = matched_customer["name"]
+                    if matched_customer.get("phone"):
+                        self.ticket_data["contact"] = matched_customer["phone"]
+
+            elif self.correction_field == "description":
+                self.ticket_data["description"] = text.strip()
+                self.ticket_data["title"] = text.strip()[:80] or "Zgłoszenie telefoniczne"
+
+            self.awaiting_correction = False
+            self.correction_field = ""
+            self.confirmation_pending = True
+            self.confirmation_misses = 0
+            await self.say_confirmation_summary()
             return
 
         # Fast deterministic state machine for normal calls.
@@ -546,15 +626,6 @@ class CallSession:
                            + json.dumps(state_context, ensure_ascii=False),
             })
 
-        if self.awaiting_correction:
-            llm_history.append({
-                "role": "system",
-                "content": (
-                    "Użytkownik właśnie poprawia wcześniejsze dane. "
-                    "Nowe wartości podane w tej wypowiedzi mają nadpisać odpowiednie stare pola."
-                ),
-            })
-
         try:
             result = await ask_ollama(
                 self.settings["ollama_url"],
@@ -575,9 +646,6 @@ class CallSession:
         for key, value in ticket_update.items():
             if value not in (None, "", [], {}):
                 self.ticket_data[key] = value
-
-        if self.awaiting_correction:
-            self.awaiting_correction = False
 
         # Normalize contact phone numbers recognized with spaces, commas or dashes.
         contact_value = str(self.ticket_data.get("contact", "") or "")
