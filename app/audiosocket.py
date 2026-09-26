@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import struct
 import uuid
 from collections import deque
@@ -123,6 +124,7 @@ class CallSession:
                 self.settings["whisper_device"],
                 self.settings["whisper_compute_type"],
                 8000,
+                self.settings.get("stt_prompt", ""),
             )
         except Exception:
             log.exception("[%s] STT error", self.call_id)
@@ -192,6 +194,12 @@ class CallSession:
         for key, value in ticket_update.items():
             if value not in (None, "", [], {}):
                 self.ticket_data[key] = value
+
+        # Normalize contact phone numbers recognized with spaces, commas or dashes.
+        contact_value = str(self.ticket_data.get("contact", "") or "")
+        contact_digits = re.sub(r"\D", "", contact_value)
+        if 9 <= len(contact_digits) <= 15:
+            self.ticket_data["contact"] = contact_digits
 
         # If we are clearly asking for a problem and the caller gives a real
         # utterance, accept it as the description even if the LLM is too strict.
