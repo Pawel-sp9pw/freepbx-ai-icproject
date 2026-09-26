@@ -3,6 +3,7 @@ import logging
 import base64
 import secrets
 import subprocess
+import shutil
 from pathlib import Path
 
 import httpx
@@ -14,7 +15,7 @@ from .config import load_settings, save_settings, encrypt_secret, decrypt_secret
 from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
-from .monitoring import init_db, runtime_status, service_status, linux_resource_status, list_calls, get_call
+from .monitoring import init_db, runtime_status, service_status, linux_resource_status, resource_history, list_calls, get_call
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,6 +120,63 @@ async def dashboard_status():
     rt["services"] = service_status()
     rt["resources"] = linux_resource_status()
     return rt
+
+
+@app.get("/api/resources/history")
+async def resources_history(hours: int = 24):
+    return {"items": resource_history(hours)}
+
+
+@app.post("/api/performance/profile")
+async def performance_profile(profile: str = Form(...)):
+    profiles = {
+        "fast": {
+            "ollama_model": "qwen3:1.7b",
+            "whisper_model": "base",
+            "whisper_device": "cpu",
+            "whisper_compute_type": "int8",
+        },
+        "balanced": {
+            "ollama_model": "qwen3:4b",
+            "whisper_model": "small",
+            "whisper_device": "cpu",
+            "whisper_compute_type": "int8",
+        },
+        "very_fast": {
+            "ollama_model": "qwen3:0.6b",
+            "whisper_model": "tiny",
+            "whisper_device": "cpu",
+            "whisper_compute_type": "int8",
+        },
+    }
+    selected = profiles.get(profile)
+    if not selected:
+        return {"ok": False, "message": "Nieznany profil."}
+
+    save_settings(selected)
+
+    ollama_bin = shutil.which("ollama")
+    if ollama_bin:
+        unit = f"freepbx-ai-model-pull-{profile}"
+        subprocess.run(
+            [
+                "systemd-run",
+                f"--unit={unit}",
+                "--collect",
+                ollama_bin,
+                "pull",
+                selected["ollama_model"],
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    return {
+        "ok": True,
+        "message": "Profil zapisany. Model Ollama jest pobierany w tle, jeśli nie był jeszcze dostępny.",
+        **selected,
+    }
 
 
 @app.get("/api/calls")
