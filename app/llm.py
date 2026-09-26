@@ -16,8 +16,14 @@ Zwróć wyłącznie JSON:
   }
 }
 Priorytet tylko: low, normal, high.
-Jeśli brakuje danych, zadaj jedno krótkie pytanie i ustaw done=false.
-Nie ustawiaj done=true, jeśli nie ma co najmniej sensownego title i description.
+Zasady zbierania danych:
+- Zachowuj wszystkie wcześniej zebrane pola ticket i nie usuwaj ich w kolejnych odpowiedziach.
+- Jeśli użytkownik odpowiada na pytanie o problem dowolnym niepustym zdaniem, potraktuj tę treść jako description, nawet jeśli jest krótka lub testowa.
+- Jeśli jest description, ale nie ma title, utwórz krótki title na podstawie description.
+- Nie wymagaj od użytkownika ponownego podawania informacji, którą już podał.
+- Jeśli brakuje danych, zadaj tylko jedno krótkie pytanie i ustaw done=false.
+- Jeśli masz co najmniej nazwę firmy oraz description, możesz ustawić done=true. Kontakt jest pomocny, ale nie blokuje zakończenia.
+- Nie poprawiaj ani nie wymyślaj danych użytkownika; zachowaj je możliwie dosłownie.
 """
 
 async def ask_ollama(url: str, model: str, system_prompt: str, history: list[dict]):
