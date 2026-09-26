@@ -328,6 +328,30 @@ class CallSession:
             self.ticket_data["description"] = text.strip()
             self.awaiting_problem = False
 
+            # Fast path for recognized callers: company and contact already came
+            # from CallerID/customer directory, so an LLM call adds latency but
+            # no useful information. Go straight to confirmation.
+            company = str(self.ticket_data.get("company", "") or "").strip()
+            contact = str(self.ticket_data.get("contact", "") or "").strip()
+            description = str(self.ticket_data.get("description", "") or "").strip()
+            if company and contact and description:
+                if not self.ticket_data.get("title"):
+                    self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
+
+                spoken_contact = speak_phone(contact)
+                self.confirmation_pending = True
+                self.confirmation_misses = 0
+                self.awaiting_correction = False
+
+                await self.say(
+                    "Podsumuję zgłoszenie. "
+                    f"Firma: {company}. "
+                    f"Numer kontaktowy: {spoken_contact}. "
+                    f"Problem: {description}. "
+                    "Czy dane są poprawne? Proszę powiedzieć tak lub nie."
+                )
+                return
+
         # Give the LLM an explicit snapshot of already collected data. This is
         # more reliable with small local models than expecting them to reconstruct
         # state only from previous JSON turns.
