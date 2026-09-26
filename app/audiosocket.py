@@ -5,6 +5,7 @@ import re
 import struct
 import uuid
 from collections import deque
+from difflib import SequenceMatcher
 import webrtcvad
 
 from .config import load_settings, decrypt_secret
@@ -51,6 +52,55 @@ async def send_pcm(writer, pcm: bytes):
         await send_packet(writer, TYPE_PCM_8K, chunk)
         await asyncio.sleep(0.02)
 
+
+def parse_customer_directory(raw: str):
+    items = []
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" in line:
+            name, phone = line.split("|", 1)
+        else:
+            name, phone = line, ""
+        name = name.strip()
+        phone_digits = re.sub(r"\D", "", phone or "")
+        if name:
+            items.append({"name": name, "phone": phone_digits})
+    return items
+
+
+def normalize_company(value: str):
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
+def match_customer(company: str, contact: str, directory: list):
+    contact_digits = re.sub(r"\D", "", contact or "")
+    # Phone match is strongest and can repair a badly recognized company name.
+    if contact_digits:
+        for item in directory:
+            phone = item.get("phone", "")
+            if phone and (contact_digits == phone or contact_digits.endswith(phone[-9:]) or phone.endswith(contact_digits[-9:])):
+                return item, 1.0
+
+    source = normalize_company(company)
+    if not source:
+        return None, 0.0
+
+    best = None
+    best_score = 0.0
+    for item in directory:
+        target = normalize_company(item.get("name", ""))
+        if not target:
+            continue
+        score = SequenceMatcher(None, source, target).ratio()
+        if source in target or target in source:
+            score = max(score, 0.88)
+        if score > best_score:
+            best, best_score = item, score
+    return (best, best_score) if best_score >= 0.58 else (None, best_score)
+
+
 class CallSession:
     def __init__(self, call_id: str, writer):
         self.call_id = call_id
@@ -66,6 +116,9 @@ class CallSession:
         self.turns = 0
         self.closed = False
         self.ticket_data = {}
+        self.customer_directory = parse_customer_directory(self.settings.get("customer_directory", ""))
+        self.confirmation_pending = False
+        self.awaiting_correction = False
         self.stt_misses = 0
         self.last_question = ""
         self.final_status = "ended"
@@ -124,7 +177,10 @@ class CallSession:
                 self.settings["whisper_device"],
                 self.settings["whisper_compute_type"],
                 8000,
-                self.settings.get("stt_prompt", ""),
+                (
+                    self.settings.get("stt_prompt", "")
+                    + (" Klienci: " + ", ".join(x["name"] for x in self.customer_directory) if self.customer_directory else "")
+                ),
             )
         except Exception:
             log.exception("[%s] STT error", self.call_id)
@@ -160,6 +216,55 @@ class CallSession:
             self.closed = True
             await asyncio.sleep(0.2)
             self.writer.close()
+            return
+
+        if self.confirmation_pending:
+            yes_phrases = ("tak", "zgadza się", "zgadza sie", "potwierdzam", "poprawnie", "wszystko się zgadza", "wszystko sie zgadza")
+            no_phrases = ("nie", "nie zgadza", "popraw", "błąd", "blad", "zmień", "zmien")
+
+            if any(p in normalized for p in yes_phrases):
+                self.confirmation_pending = False
+                ticket = dict(self.ticket_data)
+                try:
+                    token = decrypt_secret(self.settings.get("icp_token_enc", ""))
+                    client = ICProjectClient(
+                        self.settings.get("icp_instance", ""),
+                        token,
+                        self.settings.get("icp_board_column", ""),
+                    )
+                    created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
+                    ticket_no = created.get("number") or created.get("shortCode") or ""
+                    suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
+                    self.ticket_ref = str(ticket_no or created.get("id") or "")
+                    self.final_status = "completed"
+                    await self.say("Dziękuję. Zgłoszenie zostało zapisane." + suffix + " Do widzenia.")
+                    self.closed = True
+                    await asyncio.sleep(0.3)
+                    self.writer.close()
+                    return
+                except Exception as e:
+                    self.final_status = "icp_error"
+                    self.final_error = str(e)
+                    log.exception("[%s] ICP create error", self.call_id)
+                    await self.say(
+                        "Nie udało się zapisać zgłoszenia w systemie. "
+                        "Proszę skontaktować się z serwisem. Do widzenia."
+                    )
+                    self.closed = True
+                    await asyncio.sleep(0.2)
+                    self.writer.close()
+                    return
+
+            if any(p in normalized for p in no_phrases):
+                self.confirmation_pending = False
+                self.awaiting_correction = True
+                await self.say(
+                    "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
+                    "nazwę firmy, numer kontaktowy albo opis problemu."
+                )
+                return
+
+            await self.say("Proszę odpowiedzieć: tak, jeśli dane są poprawne, albo nie, jeśli mam je poprawić.")
             return
 
         # Give the LLM an explicit snapshot of already collected data. This is
@@ -201,6 +306,16 @@ class CallSession:
         if 9 <= len(contact_digits) <= 15:
             self.ticket_data["contact"] = contact_digits
 
+        matched_customer, match_score = match_customer(
+            str(self.ticket_data.get("company", "") or ""),
+            str(self.ticket_data.get("contact", "") or ""),
+            self.customer_directory,
+        )
+        if matched_customer:
+            self.ticket_data["company"] = matched_customer["name"]
+            if not self.ticket_data.get("contact") and matched_customer.get("phone"):
+                self.ticket_data["contact"] = matched_customer["phone"]
+
         # If we are clearly asking for a problem and the caller gives a real
         # utterance, accept it as the description even if the LLM is too strict.
         previous_agent = ""
@@ -233,36 +348,20 @@ class CallSession:
         self.history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
 
         if result.get("done"):
-            ticket = dict(self.ticket_data)
-            try:
-                token = decrypt_secret(self.settings.get("icp_token_enc", ""))
-                client = ICProjectClient(
-                    self.settings.get("icp_instance", ""),
-                    token,
-                    self.settings.get("icp_board_column", ""),
-                )
-                created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
-                ticket_no = created.get("number") or created.get("shortCode") or ""
-                suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
-                self.ticket_ref = str(ticket_no or created.get("id") or "")
-                self.final_status = "completed"
-                await self.say(reply + suffix + " Dziękuję za zgłoszenie.")
-                self.closed = True
-                await asyncio.sleep(0.3)
-                self.writer.close()
-                return
-            except Exception as e:
-                self.final_status = "icp_error"
-                self.final_error = str(e)
-                log.exception("[%s] ICP create error", self.call_id)
-                await self.say(
-                    "Mam zebrane informacje, ale nie udało się teraz utworzyć zgłoszenia. "
-                    "Proszę skontaktować się z serwisem. Do widzenia."
-                )
-                self.closed = True
-                await asyncio.sleep(0.2)
-                self.writer.close()
-                return
+            company = str(self.ticket_data.get("company", "") or "").strip() or "nie podano"
+            contact = str(self.ticket_data.get("contact", "") or "").strip() or "nie podano"
+            description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
+
+            self.confirmation_pending = True
+            self.awaiting_correction = False
+            await self.say(
+                "Podsumuję zgłoszenie. "
+                f"Firma: {company}. "
+                f"Numer kontaktowy: {contact}. "
+                f"Problem: {description}. "
+                "Czy dane są poprawne? Proszę powiedzieć tak lub nie."
+            )
+            return
 
         if self.turns >= int(self.settings.get("max_turns", 8)):
             await self.say(
