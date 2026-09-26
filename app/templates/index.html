@@ -37,6 +37,36 @@
 
     <div class="status-grid">
       <div class="status-box">
+        <strong>CPU</strong>
+        <div><span id="resourceCpu">—</span></div>
+        <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:7px">
+          <div id="resourceCpuBar" style="height:100%;width:0%;background:currentColor"></div>
+        </div>
+        <div class="muted" id="resourceLoad" style="margin-top:5px"></div>
+      </div>
+      <div class="status-box">
+        <strong>RAM</strong>
+        <div><span id="resourceRam">—</span></div>
+        <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:7px">
+          <div id="resourceRamBar" style="height:100%;width:0%;background:currentColor"></div>
+        </div>
+      </div>
+      <div class="status-box">
+        <strong>Dysk /</strong>
+        <div><span id="resourceDisk">—</span></div>
+        <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:7px">
+          <div id="resourceDiskBar" style="height:100%;width:0%;background:currentColor"></div>
+        </div>
+      </div>
+      <div class="status-box">
+        <strong>Uptime</strong>
+        <div id="resourceUptime">—</div>
+        <div class="muted" id="resourceSwap" style="margin-top:5px"></div>
+      </div>
+    </div>
+
+    <div class="status-grid">
+      <div class="status-box">
         <strong>FreePBX / AudioSocket</strong>
         <span id="freepbxStatus" class="badge warn">brak danych</span>
         <div class="muted" id="freepbxDetails" style="margin-top:6px"></div>
@@ -262,6 +292,22 @@ PersistentKeepalive = 25"></textarea>
     try{return new Date(value).toLocaleString('pl-PL');}catch(e){return value;}
   }
 
+  function formatBytes(bytes){
+    bytes=Number(bytes || 0);
+    const units=['B','KB','MB','GB','TB'];
+    let i=0;
+    while(bytes>=1024 && i<units.length-1){bytes/=1024;i++;}
+    return bytes.toFixed(i>=3?1:0)+' '+units[i];
+  }
+
+  function formatUptime(sec){
+    sec=Number(sec || 0);
+    const d=Math.floor(sec/86400); sec%=86400;
+    const h=Math.floor(sec/3600); sec%=3600;
+    const m=Math.floor(sec/60);
+    return (d?d+' d ':'')+h+' h '+m+' min';
+  }
+
   function formatDuration(sec){
     sec=Number(sec || 0);
     if(sec<60) return sec+' s';
@@ -281,6 +327,26 @@ PersistentKeepalive = 25"></textarea>
         '<span class="badge '+(s.ok?'ok':'err')+'">'+esc(s.state)+'</span>'+
         '<div class="muted" style="margin-top:5px">'+esc(s.unit)+'</div></div>'
       ).join('');
+
+      const res=j.resources || {};
+      const setBar=(id,val)=>{
+        const el=document.getElementById(id);
+        if(el) el.style.width=Math.max(0,Math.min(100,Number(val||0)))+'%';
+      };
+      document.getElementById('resourceCpu').textContent=(res.cpu_percent ?? '—')+'%';
+      document.getElementById('resourceLoad').textContent=
+        'load: '+(res.load_1 ?? '—')+' / '+(res.load_5 ?? '—')+' / '+(res.load_15 ?? '—')+
+        (res.cpu_count ? ' · CPU: '+res.cpu_count : '');
+      document.getElementById('resourceRam').textContent=
+        (res.ram_percent ?? '—')+'% · '+formatBytes(res.ram_used)+' / '+formatBytes(res.ram_total);
+      document.getElementById('resourceDisk').textContent=
+        (res.disk_percent ?? '—')+'% · '+formatBytes(res.disk_used)+' / '+formatBytes(res.disk_total);
+      document.getElementById('resourceUptime').textContent=formatUptime(res.uptime_seconds);
+      document.getElementById('resourceSwap').textContent=
+        res.swap_total ? 'swap: '+(res.swap_percent ?? 0)+'% · '+formatBytes(res.swap_used)+' / '+formatBytes(res.swap_total) : 'swap: brak';
+      setBar('resourceCpuBar',res.cpu_percent);
+      setBar('resourceRamBar',res.ram_percent);
+      setBar('resourceDiskBar',res.disk_percent);
 
       const fp=document.getElementById('freepbxStatus');
       const fpd=document.getElementById('freepbxDetails');
