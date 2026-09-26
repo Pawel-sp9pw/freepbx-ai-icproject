@@ -144,6 +144,22 @@ class CallSession:
         add_message(self.call_id, "user", text)
         self.history.append({"role": "user", "content": text})
 
+        normalized = " ".join(text.lower().strip(" .,!?:;").split())
+        goodbye_phrases = (
+            "do widzenia",
+            "dziękuję do widzenia",
+            "dziekuje do widzenia",
+            "to wszystko",
+            "koniec",
+        )
+        if any(phrase in normalized for phrase in goodbye_phrases):
+            self.final_status = "caller_ended"
+            await self.say("Dziękuję za rozmowę. Do widzenia.")
+            self.closed = True
+            await asyncio.sleep(0.2)
+            self.writer.close()
+            return
+
         # Give the LLM an explicit snapshot of already collected data. This is
         # more reliable with small local models than expecting them to reconstruct
         # state only from previous JSON turns.
@@ -226,12 +242,17 @@ class CallSession:
                 await asyncio.sleep(0.3)
                 self.writer.close()
                 return
-            except Exception:
+            except Exception as e:
+                self.final_status = "icp_error"
+                self.final_error = str(e)
                 log.exception("[%s] ICP create error", self.call_id)
                 await self.say(
                     "Mam zebrane informacje, ale nie udało się teraz utworzyć zgłoszenia. "
-                    "Proszę spróbować ponownie lub skontaktować się z serwisem."
+                    "Proszę skontaktować się z serwisem. Do widzenia."
                 )
+                self.closed = True
+                await asyncio.sleep(0.2)
+                self.writer.close()
                 return
 
         if self.turns >= int(self.settings.get("max_turns", 8)):
