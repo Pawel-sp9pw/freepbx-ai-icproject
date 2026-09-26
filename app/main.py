@@ -118,13 +118,18 @@ async def save(
     return RedirectResponse("/?saved=1", status_code=303)
 
 @app.post("/api/test/icp")
-async def test_icp():
+async def test_icp(
+    icp_instance: str = Form(""),
+    icp_token: str = Form(""),
+    icp_board_column: str = Form(""),
+):
     s = load_settings()
-    client = ICProjectClient(
-        s.get("icp_instance", ""),
-        decrypt_secret(s.get("icp_token_enc", "")),
-        s.get("icp_board_column", ""),
-    )
+
+    instance = icp_instance.strip() or s.get("icp_instance", "")
+    token = icp_token.strip() or decrypt_secret(s.get("icp_token_enc", ""))
+    board_column = icp_board_column.strip() or s.get("icp_board_column", "")
+
+    client = ICProjectClient(instance, token, board_column)
     ok, message = await client.test()
     return {"ok": ok, "message": message}
 
