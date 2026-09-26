@@ -201,8 +201,10 @@
       </div>
 
       <label>Token CallerID z FreePBX
-        <input name="callerid_api_key" value="{{s.callerid_api_key}}" readonly>
+        <input id="callerIdApiKey" name="callerid_api_key" value="{{s.callerid_api_key}}" readonly>
       </label>
+      <button type="button" class="test" onclick="rotateCallerIdToken()">Wygeneruj nowy token CallerID</button>
+      <span id="callerIdTokenResult"></span>
       <div class="muted">
         Token służy wyłącznie do przekazania UUID i numeru dzwoniącego z Asteriska do agenta.
       </div>
@@ -657,6 +659,21 @@ PersistentKeepalive = 25"></textarea>
       const j=await r.json();
       renderHistoryChart(j.items || []);
     }catch(e){}
+  }
+
+  async function rotateCallerIdToken(){
+    const out=document.getElementById('callerIdTokenResult');
+    try{
+      const r=await fetch('/api/call/token/rotate',{method:'POST'});
+      const j=await r.json();
+      if(!j.ok) throw new Error(j.message || 'błąd');
+      document.getElementById('callerIdApiKey').value=j.callerid_api_key;
+      out.textContent=' Nowy token wygenerowany — zaktualizuj go w FreePBX.';
+      out.className='ok';
+    }catch(e){
+      out.textContent=' BŁĄD — '+e;
+      out.className='err';
+    }
   }
 
   async function refreshCallerIdStatus(){
