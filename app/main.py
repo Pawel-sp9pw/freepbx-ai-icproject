@@ -32,6 +32,8 @@ UPDATE_LOG_FILE = Path("/var/lib/freepbx-ai/update.log")
 MODEL_PULL_STATE_FILE = Path("/var/lib/freepbx-ai/model-pull.state")
 MODEL_PULL_LOG_FILE = Path("/var/lib/freepbx-ai/model-pull.log")
 MODEL_PULL_MODEL_FILE = Path("/var/lib/freepbx-ai/model-pull.model")
+TEST_STATE_FILE = Path("/var/lib/freepbx-ai/tests.state")
+TEST_LOG_FILE = Path("/var/lib/freepbx-ai/tests.log")
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
@@ -156,6 +158,60 @@ async def update_start():
 
         return {"ok": True, "message": "Aktualizacja uruchomiona w tle."}
     except Exception as e:
+        return {"ok": False, "message": str(e)}
+
+
+@app.get("/api/tests/status")
+async def tests_status():
+    state = TEST_STATE_FILE.read_text().strip() if TEST_STATE_FILE.exists() else "idle"
+    log = TEST_LOG_FILE.read_text(errors="replace")[-20000:] if TEST_LOG_FILE.exists() else ""
+    return {"state": state, "log": log}
+
+
+@app.post("/api/tests/start")
+async def tests_start():
+    try:
+        rt = await asyncio.to_thread(runtime_status)
+        if int(rt.get("active_count", 0) or 0) > 0:
+            return {
+                "ok": False,
+                "message": "Nie można uruchomić testów podczas aktywnej rozmowy.",
+            }
+
+        check = await asyncio.to_thread(
+            subprocess.run,
+            ["systemctl", "is-active", "freepbx-ai-tests.service"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if check.stdout.strip() == "active":
+            return {"ok": False, "message": "Testy już trwają."}
+
+        TEST_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TEST_STATE_FILE.write_text("starting\n")
+        TEST_LOG_FILE.write_text("Uruchamianie testów regresyjnych...\n")
+
+        p = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "systemd-run",
+                "--unit=freepbx-ai-tests",
+                "--collect",
+                "/bin/bash",
+                "/opt/freepbx-ai-icproject/scripts/run-tests-panel.sh",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if p.returncode != 0:
+            TEST_STATE_FILE.write_text(f"error:{p.returncode}\n")
+            return {"ok": False, "message": (p.stderr or p.stdout).strip()}
+
+        return {"ok": True, "message": "Testy uruchomione w tle."}
+    except Exception as e:
+        TEST_STATE_FILE.write_text("error:start\n")
         return {"ok": False, "message": str(e)}
 
 
