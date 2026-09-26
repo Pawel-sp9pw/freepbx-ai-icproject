@@ -9,6 +9,12 @@ from faster_whisper import WhisperModel
 log = logging.getLogger("stt")
 _models = {}
 
+PROMPT_LEAK_PHRASES = (
+    "oczekiwane odpowiedzi",
+    "krótka odpowiedź na pytanie o potwierdzenie",
+    "krotka odpowiedz na pytanie o potwierdzenie",
+)
+
 
 def get_model(name: str, device: str, compute_type: str):
     key = (name, device, compute_type)
@@ -22,7 +28,13 @@ def _looks_hallucinated(text: str, audio_seconds: float):
     if not clean:
         return True, "empty"
 
-    words = clean.lower().split()
+    lower_clean = clean.lower()
+    words = lower_clean.split()
+
+    # Reject obvious prompt leakage. This can happen with very short audio
+    # where Whisper copies text from initial_prompt instead of the caller.
+    if any(phrase in lower_clean for phrase in PROMPT_LEAK_PHRASES):
+        return True, "prompt_leak"
 
     # Whisper on noise/silence can emit extremely long repetitive text.
     # Natural telephone speech is usually far below this limit.
