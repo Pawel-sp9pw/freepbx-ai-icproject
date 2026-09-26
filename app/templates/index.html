@@ -191,6 +191,14 @@
         <textarea name="stt_prompt" placeholder="Np. Virtual World, PCMED, MediQus, P1, NFZ, e-recepta">{{s.stt_prompt}}</textarea>
       </label>
       <div class="muted">Wpisz nazwy klientów, produktów i skróty, które agent ma lepiej rozpoznawać.</div>
+
+      <label>Słownik klientów
+        <textarea name="customer_directory" placeholder="Virtual World | 792032104&#10;Przychodnia Test | 600100200">{{s.customer_directory}}</textarea>
+      </label>
+      <div class="muted">
+        Jeden klient w wierszu: <code>Nazwa firmy | numer telefonu</code>. Agent użyje listy do dopasowania
+        rozpoznanej nazwy/numeru oraz jako dodatkowej podpowiedzi STT.
+      </div>
     </div>
 
     <div class="card">
