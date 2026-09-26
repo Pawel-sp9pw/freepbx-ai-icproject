@@ -174,13 +174,15 @@ class CallSession:
         self.silence_frames = 0
         self.stt_misses = 0
         self.last_tts_end = time.monotonic()
-        self.listen_not_before = self.last_tts_end + 0.45
+        self.listen_not_before = self.last_tts_end + (0.20 if self.confirmation_pending else 0.45)
 
     async def say_confirmation_summary(self):
         company = str(self.ticket_data.get("company", "") or "").strip() or "nie podano"
         contact = str(self.ticket_data.get("contact", "") or "").strip() or "nie podano"
         spoken_contact = speak_phone(contact) if contact != "nie podano" else contact
         description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
+        if description != "nie podano":
+            description = description.rstrip(" .!?")
 
         await self.say(
             "Podsumuję zgłoszenie. "
@@ -188,7 +190,7 @@ class CallSession:
             f"Numer kontaktowy: {spoken_contact}. "
             f"Problem: {description}."
         )
-        await asyncio.sleep(0.75)
+        await asyncio.sleep(0.35)
         await self.say("Czy dane są poprawne? Proszę powiedzieć tak lub nie.")
 
     async def finalize_ticket(self):
@@ -289,7 +291,8 @@ class CallSession:
                 self.speech.extend(frame)
                 self.silence_frames += 1
                 silence_ms = self.silence_frames * 20
-                if silence_ms >= int(self.settings.get("silence_ms", 900)):
+                silence_target_ms = 350 if self.confirmation_pending else int(self.settings.get("silence_ms", 900))
+                if silence_ms >= silence_target_ms:
                     pcm = bytes(self.speech)
                     self.speech.clear()
                     self.speaking = False
@@ -320,7 +323,8 @@ class CallSession:
         if not text:
             self.stt_misses += 1
             now = time.monotonic()
-            enough_time_to_answer = (now - self.last_tts_end) >= 4.0
+            wait_before_repeat = 2.0 if self.confirmation_pending else 4.0
+            enough_time_to_answer = (now - self.last_tts_end) >= wait_before_repeat
             repeat_cooldown_ok = (now - self.last_repeat_prompt) >= 8.0
             if self.stt_misses >= 3 and enough_time_to_answer and repeat_cooldown_ok:
                 self.stt_misses = 0
