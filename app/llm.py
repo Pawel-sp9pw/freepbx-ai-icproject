@@ -37,7 +37,12 @@ async def ask_ollama(url: str, model: str, system_prompt: str, history: list[dic
         "messages": messages,
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0.2},
+        "think": False,
+        "keep_alive": "30m",
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 192,
+        },
     }
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(f"{url.rstrip('/')}/api/chat", json=payload)
