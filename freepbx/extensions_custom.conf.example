@@ -2,14 +2,18 @@
 exten => s,1,NoOp(AI IC Project Agent)
  same => n,Answer()
  same => n,Set(AI_UUID=${UUID()})
+
+ ; FreePBX potrafi mieć numer w różnych zmiennych.
  same => n,Set(AI_CALLER=${CALLERID(num)})
  same => n,ExecIf($["${AI_CALLER}"=""]?Set(AI_CALLER=${CRM_SOURCE}))
  same => n,ExecIf($["${AI_CALLER}"=""]?Set(AI_CALLER=${CALLERID(name)}))
+
  same => n,NoOp(AI Caller source: num=${CALLERID(num)} crm=${CRM_SOURCE} name=${CALLERID(name)} selected=${AI_CALLER})
- same => n,Set(CURLOPT(conntimeout)=2)
- same => n,Set(CURLOPT(httptimeout)=3)
+
  ; Wstaw token CallerID z panelu agenta.
- same => n,Set(AI_REG=${CURL(http://10.0.0.21:8080/api/call/register?uuid=${AI_UUID}&caller=${AI_CALLER}&token=CALLERID_TOKEN)})
- same => n,NoOp(AI CallerID registration: ${AI_REG})
+ ; Uzywamy systemowego curl zamiast funkcji CURL() Asteriska.
+ same => n,System(/usr/bin/curl -sS --max-time 3 'http://10.0.0.21:8080/api/call/register?uuid=${AI_UUID}&caller=${AI_CALLER}&token=CALLERID_TOKEN' >/tmp/ai-callerid-${AI_UUID}.log 2>&1)
+ same => n,NoOp(AI CallerID curl status: ${SYSTEMSTATUS})
+
  same => n,AudioSocket(${AI_UUID},10.0.0.21:9019)
  same => n,Hangup()
