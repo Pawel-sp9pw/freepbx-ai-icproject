@@ -12,7 +12,7 @@ import webrtcvad
 from .config import load_settings, decrypt_secret
 from .stt import transcribe_pcm16
 from .tts import synthesize_pcm8k
-from .llm import ask_ollama
+from .llm import ask_ollama, interpret_turn
 from .icproject import ICProjectClient
 from .monitoring import call_started, add_message, finish_call
 from .call_registry import consume_caller
@@ -176,6 +176,66 @@ class CallSession:
         self.last_tts_end = time.monotonic()
         self.listen_not_before = self.last_tts_end + 0.45
 
+    async def say_confirmation_summary(self):
+        company = str(self.ticket_data.get("company", "") or "").strip() or "nie podano"
+        contact = str(self.ticket_data.get("contact", "") or "").strip() or "nie podano"
+        spoken_contact = speak_phone(contact) if contact != "nie podano" else contact
+        description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
+
+        await self.say(
+            "Podsumuję zgłoszenie. "
+            f"Firma: {company}. "
+            f"Numer kontaktowy: {spoken_contact}. "
+            f"Problem: {description}."
+        )
+        await asyncio.sleep(0.75)
+        await self.say("Czy dane są poprawne? Proszę powiedzieć tak lub nie.")
+
+    async def finalize_ticket(self):
+        ticket = dict(self.ticket_data)
+        try:
+            token = decrypt_secret(self.settings.get("icp_token_enc", ""))
+            client = ICProjectClient(
+                self.settings.get("icp_instance", ""),
+                token,
+                self.settings.get("icp_board_column", ""),
+            )
+            created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
+            ticket_no = created.get("number") or created.get("shortCode") or ""
+            suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
+            self.ticket_ref = str(ticket_no or created.get("id") or "")
+            self.final_status = "completed"
+            await self.say("Dziękuję. Zgłoszenie zostało zapisane." + suffix + " Do widzenia.")
+            self.closed = True
+            await asyncio.sleep(0.3)
+            self.writer.close()
+            return True
+        except Exception as e:
+            self.final_status = "icp_error"
+            self.final_error = str(e)
+            log.exception("[%s] ICP create error", self.call_id)
+            await self.say(
+                "Nie udało się zapisać zgłoszenia w systemie. "
+                "Proszę skontaktować się z serwisem. Do widzenia."
+            )
+            self.closed = True
+            await asyncio.sleep(0.2)
+            self.writer.close()
+            return False
+
+    async def interpret_fallback(self, expected: str, text: str):
+        try:
+            return await interpret_turn(
+                self.settings["ollama_url"],
+                self.settings["ollama_model"],
+                expected,
+                text,
+                dict(self.ticket_data),
+            )
+        except Exception:
+            log.exception("[%s] LLM fallback error", self.call_id)
+            return {"intent": "unknown", "company": "", "contact": "", "description": ""}
+
     async def start(self):
         company = str(self.ticket_data.get("company", "") or "").strip()
         contact = str(self.ticket_data.get("contact", "") or "").strip()
@@ -297,36 +357,8 @@ class CallSession:
             if any(p in normalized for p in yes_phrases):
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
-                ticket = dict(self.ticket_data)
-                try:
-                    token = decrypt_secret(self.settings.get("icp_token_enc", ""))
-                    client = ICProjectClient(
-                        self.settings.get("icp_instance", ""),
-                        token,
-                        self.settings.get("icp_board_column", ""),
-                    )
-                    created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
-                    ticket_no = created.get("number") or created.get("shortCode") or ""
-                    suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
-                    self.ticket_ref = str(ticket_no or created.get("id") or "")
-                    self.final_status = "completed"
-                    await self.say("Dziękuję. Zgłoszenie zostało zapisane." + suffix + " Do widzenia.")
-                    self.closed = True
-                    await asyncio.sleep(0.3)
-                    self.writer.close()
-                    return
-                except Exception as e:
-                    self.final_status = "icp_error"
-                    self.final_error = str(e)
-                    log.exception("[%s] ICP create error", self.call_id)
-                    await self.say(
-                        "Nie udało się zapisać zgłoszenia w systemie. "
-                        "Proszę skontaktować się z serwisem. Do widzenia."
-                    )
-                    self.closed = True
-                    await asyncio.sleep(0.2)
-                    self.writer.close()
-                    return
+                await self.finalize_ticket()
+                return
 
             if any(p in normalized for p in no_phrases):
                 self.confirmation_pending = False
@@ -337,6 +369,26 @@ class CallSession:
                 self.awaiting_problem = False
                 await self.say(
                     "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
+                    "nazwę firmy, numer kontaktowy albo opis problemu."
+                )
+                return
+
+            # Unexpected answer: only now use the LLM as a fallback.
+            interpreted = await self.interpret_fallback("potwierdzenie danych tak/nie", text)
+            intent = str(interpreted.get("intent", "")).lower()
+
+            if intent == "confirm_yes":
+                self.confirmation_pending = False
+                self.confirmation_misses = 0
+                await self.finalize_ticket()
+                return
+
+            if intent in ("confirm_no", "correction"):
+                self.confirmation_pending = False
+                self.confirmation_misses = 0
+                self.awaiting_correction = True
+                await self.say(
+                    "Dobrze. Proszę podać tylko dane, które mam poprawić: "
                     "nazwę firmy, numer kontaktowy albo opis problemu."
                 )
                 return
@@ -352,6 +404,19 @@ class CallSession:
         if self.awaiting_company:
             phone = extract_phone_digits(text)
             company_text = company_without_phone(text) or text.strip()
+
+            looks_like_problem = any(
+                phrase in normalized
+                for phrase in ("problem", "nie działa", "nie dziala", "awaria", "błąd", "blad", "usterka", "nie mogę", "nie moge")
+            )
+            if looks_like_problem:
+                interpreted = await self.interpret_fallback("nazwa firmy", text)
+                if interpreted.get("company"):
+                    company_text = str(interpreted["company"]).strip()
+                if interpreted.get("contact") and not phone:
+                    phone = extract_phone_digits(str(interpreted["contact"]))
+                if interpreted.get("description"):
+                    self.ticket_data["description"] = str(interpreted["description"]).strip()
 
             matched_customer, match_score = match_customer(
                 company_text,
@@ -381,11 +446,21 @@ class CallSession:
         if self.awaiting_contact:
             phone = extract_phone_digits(text)
             if not phone:
-                await self.say(
-                    "Nie udało mi się rozpoznać numeru. "
-                    "Proszę podać numer telefonu cyfra po cyfrze."
-                )
-                return
+                interpreted = await self.interpret_fallback("numer telefonu kontaktowego", text)
+                phone = extract_phone_digits(str(interpreted.get("contact", "") or ""))
+
+                if not phone and interpreted.get("intent") == "problem" and interpreted.get("description"):
+                    self.ticket_data["description"] = str(interpreted["description"]).strip()
+
+                if not phone and interpreted.get("company"):
+                    self.ticket_data["company"] = str(interpreted["company"]).strip()
+
+                if not phone:
+                    await self.say(
+                        "Nie udało mi się rozpoznać numeru telefonu. "
+                        "Proszę podać go cyfra po cyfrze."
+                    )
+                    return
 
             self.ticket_data["contact"] = phone
 
@@ -420,7 +495,6 @@ class CallSession:
                 if not self.ticket_data.get("title"):
                     self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
 
-                spoken_contact = speak_phone(contact)
                 self.confirmation_pending = True
                 self.confirmation_misses = 0
                 self.awaiting_correction = False
@@ -428,13 +502,7 @@ class CallSession:
                 self.awaiting_contact = False
                 self.awaiting_problem = False
 
-                await self.say(
-                    "Podsumuję zgłoszenie. "
-                    f"Firma: {company}. "
-                    f"Numer kontaktowy: {spoken_contact}. "
-                    f"Problem: {description}. "
-                    "Czy dane są poprawne? Proszę powiedzieć tak lub nie."
-                )
+                await self.say_confirmation_summary()
                 return
 
         # Give the LLM an explicit snapshot of already collected data. This is
@@ -541,13 +609,7 @@ class CallSession:
             self.confirmation_pending = True
             self.confirmation_misses = 0
             self.awaiting_correction = False
-            await self.say(
-                "Podsumuję zgłoszenie. "
-                f"Firma: {company}. "
-                f"Numer kontaktowy: {spoken_contact}. "
-                f"Problem: {description}. "
-                "Czy dane są poprawne? Proszę powiedzieć tak lub nie."
-            )
+            await self.say_confirmation_summary()
             return
 
         if self.turns >= int(self.settings.get("max_turns", 8)):
