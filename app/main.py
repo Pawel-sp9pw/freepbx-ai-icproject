@@ -13,6 +13,7 @@ from .config import load_settings, save_settings, encrypt_secret, decrypt_secret
 from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
+from .monitoring import init_db, runtime_status, service_status, list_calls, get_call
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,11 +58,32 @@ templates = Jinja2Templates(directory="/opt/freepbx-ai-icproject/app/templates")
 
 @app.on_event("startup")
 async def startup():
+    init_db()
     asyncio.create_task(start_audiosocket_server())
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/dashboard/status")
+async def dashboard_status():
+    rt = runtime_status()
+    rt["services"] = service_status()
+    return rt
+
+
+@app.get("/api/calls")
+async def calls(limit: int = 30):
+    return {"items": list_calls(limit)}
+
+
+@app.get("/api/calls/{call_id}")
+async def call_details(call_id: str):
+    item = get_call(call_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Rozmowa nie istnieje.")
+    return item
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
