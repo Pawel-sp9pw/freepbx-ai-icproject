@@ -164,3 +164,32 @@ async def api_wireguard_apply(
         return wireguard_apply(config, enable)
     except Exception as e:
         return {"ok": False, "active": False, "output": str(e)}
+
+
+@app.post("/api/change-password")
+async def change_password(
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    new_password_repeat: str = Form(...),
+):
+    if not ADMIN_PASSWORD_FILE.exists():
+        return {"ok": False, "message": "Brak pliku hasła administratora."}
+
+    stored = ADMIN_PASSWORD_FILE.read_text().strip()
+
+    if not secrets.compare_digest(current_password, stored):
+        return {"ok": False, "message": "Bieżące hasło jest nieprawidłowe."}
+
+    if len(new_password) < 12:
+        return {"ok": False, "message": "Nowe hasło musi mieć co najmniej 12 znaków."}
+
+    if new_password != new_password_repeat:
+        return {"ok": False, "message": "Nowe hasła nie są identyczne."}
+
+    if secrets.compare_digest(new_password, stored):
+        return {"ok": False, "message": "Nowe hasło musi różnić się od obecnego."}
+
+    ADMIN_PASSWORD_FILE.write_text(new_password + "\n")
+    ADMIN_PASSWORD_FILE.chmod(0o600)
+
+    return {"ok": True, "message": "Hasło zmienione. Przy następnym żądaniu użyj nowego hasła."}
