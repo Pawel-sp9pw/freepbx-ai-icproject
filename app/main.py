@@ -14,7 +14,7 @@ from .config import load_settings, save_settings, encrypt_secret, decrypt_secret
 from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
-from .monitoring import init_db, runtime_status, service_status, list_calls, get_call
+from .monitoring import init_db, runtime_status, service_status, linux_resource_status, list_calls, get_call
 
 logging.basicConfig(
     level=logging.INFO,
@@ -117,6 +117,7 @@ async def update_start():
 async def dashboard_status():
     rt = runtime_status()
     rt["services"] = service_status()
+    rt["resources"] = linux_resource_status()
     return rt
 
 
