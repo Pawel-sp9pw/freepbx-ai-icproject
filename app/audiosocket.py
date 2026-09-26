@@ -134,6 +134,7 @@ class CallSession:
         self.customer_directory = parse_customer_directory(self.settings.get("customer_directory", ""))
         self.confirmation_pending = False
         self.awaiting_correction = False
+        self.awaiting_problem = False
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -167,17 +168,20 @@ class CallSession:
         contact = str(self.ticket_data.get("contact", "") or "").strip()
 
         if company and contact:
+            self.awaiting_problem = True
             await self.say(
                 f"Dzień dobry. Tu automatyczny asystent PECEMED. "
                 f"Rozpoznaję numer jako {company}. Proszę opisać problem."
             )
         elif contact:
+            self.awaiting_problem = False
             await self.say(
                 "Dzień dobry. Tu automatyczny asystent PECEMED. "
                 "Numer kontaktowy został rozpoznany automatycznie. "
                 "Proszę podać nazwę firmy oraz opisać problem."
             )
         else:
+            self.awaiting_problem = False
             await self.say(self.settings["greeting"])
 
     async def handle_pcm(self, payload: bytes):
@@ -318,6 +322,12 @@ class CallSession:
                 await self.say("Nie udało mi się rozpoznać odpowiedzi. Proszę powiedzieć tylko: tak albo nie.")
             return
 
+        # Explicit conversation state beats LLM inference. If we just asked
+        # for the problem, accept the next non-empty utterance as description.
+        if self.awaiting_problem and not self.ticket_data.get("description"):
+            self.ticket_data["description"] = text.strip()
+            self.awaiting_problem = False
+
         # Give the LLM an explicit snapshot of already collected data. This is
         # more reliable with small local models than expecting them to reconstruct
         # state only from previous JSON turns.
@@ -439,6 +449,13 @@ class CallSession:
             self.closed = True
             self.writer.close()
             return
+
+        reply_lower = reply.lower()
+        if (
+            not self.ticket_data.get("description")
+            and any(word in reply_lower for word in ("opis problemu", "opisać problem", "opisz problem", "jaki jest problem"))
+        ):
+            self.awaiting_problem = True
 
         await self.say(reply)
 
