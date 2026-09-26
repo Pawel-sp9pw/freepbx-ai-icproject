@@ -25,8 +25,10 @@ def transcribe_pcm16(pcm: bytes, model_name="small", device="cpu", compute_type=
         segments, info = model.transcribe(
             str(path),
             language="pl",
-            vad_filter=True,
+            vad_filter=False,
             beam_size=3,
+            temperature=0.0,
+            condition_on_previous_text=False,
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         return text
