@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import struct
+import time
 import uuid
 from collections import deque
 from difflib import SequenceMatcher
@@ -129,6 +130,10 @@ class CallSession:
         self.confirmation_pending = False
         self.awaiting_correction = False
         self.stt_misses = 0
+        self.listen_not_before = 0.0
+        self.last_tts_end = 0.0
+        self.last_repeat_prompt = 0.0
+        self.confirmation_misses = 0
         self.last_question = ""
         self.final_status = "ended"
         self.ticket_ref = ""
@@ -143,6 +148,14 @@ class CallSession:
             self.settings.get("piper_voice"),
         )
         await send_pcm(self.writer, pcm)
+        self.frame_buf.clear()
+        self.speech.clear()
+        self.pre_roll.clear()
+        self.speaking = False
+        self.silence_frames = 0
+        self.stt_misses = 0
+        self.last_tts_end = time.monotonic()
+        self.listen_not_before = self.last_tts_end + 0.45
 
     async def start(self):
         company = str(self.ticket_data.get("company", "") or "").strip()
@@ -163,6 +176,8 @@ class CallSession:
             await self.say(self.settings["greeting"])
 
     async def handle_pcm(self, payload: bytes):
+        if time.monotonic() < self.listen_not_before:
+            return
         self.frame_buf.extend(payload)
         while len(self.frame_buf) >= 320:
             frame = bytes(self.frame_buf[:320])
@@ -213,10 +228,12 @@ class CallSession:
 
         if not text:
             self.stt_misses += 1
-            # Do not speak on every noise/silence fragment. Ask for repetition
-            # only after two consecutive failed recognitions.
-            if self.stt_misses >= 2:
+            now = time.monotonic()
+            enough_time_to_answer = (now - self.last_tts_end) >= 4.0
+            repeat_cooldown_ok = (now - self.last_repeat_prompt) >= 8.0
+            if self.stt_misses >= 3 and enough_time_to_answer and repeat_cooldown_ok:
                 self.stt_misses = 0
+                self.last_repeat_prompt = now
                 await self.say("Nie dosłyszałem. Proszę powtórzyć.")
             return
 
@@ -248,6 +265,7 @@ class CallSession:
 
             if any(p in normalized for p in yes_phrases):
                 self.confirmation_pending = False
+                self.confirmation_misses = 0
                 ticket = dict(self.ticket_data)
                 try:
                     token = decrypt_secret(self.settings.get("icp_token_enc", ""))
@@ -281,6 +299,7 @@ class CallSession:
 
             if any(p in normalized for p in no_phrases):
                 self.confirmation_pending = False
+                self.confirmation_misses = 0
                 self.awaiting_correction = True
                 await self.say(
                     "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
@@ -288,7 +307,10 @@ class CallSession:
                 )
                 return
 
-            await self.say("Proszę odpowiedzieć: tak, jeśli dane są poprawne, albo nie, jeśli mam je poprawić.")
+            self.confirmation_misses += 1
+            if self.confirmation_misses >= 2:
+                self.confirmation_misses = 0
+                await self.say("Nie udało mi się rozpoznać odpowiedzi. Proszę powiedzieć tylko: tak albo nie.")
             return
 
         # Give the LLM an explicit snapshot of already collected data. This is
@@ -392,6 +414,7 @@ class CallSession:
             description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
 
             self.confirmation_pending = True
+            self.confirmation_misses = 0
             self.awaiting_correction = False
             await self.say(
                 "Podsumuję zgłoszenie. "
