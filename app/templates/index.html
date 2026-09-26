@@ -113,6 +113,17 @@ PersistentKeepalive = 25"></textarea>
       <span id="wgResult"></span>
     </div>
 
+
+    <div class="card">
+      <h2>Zmiana hasła administratora</h2>
+      <p class="muted">Hasło dotyczy logowania do tego panelu. Minimum 12 znaków.</p>
+      <label>Bieżące hasło<input id="currentPassword" type="password" autocomplete="current-password"></label>
+      <label>Nowe hasło<input id="newPassword" type="password" autocomplete="new-password"></label>
+      <label>Powtórz nowe hasło<input id="newPasswordRepeat" type="password" autocomplete="new-password"></label>
+      <button type="button" class="test" onclick="changePassword()">Zmień hasło</button>
+      <span id="passwordResult"></span>
+    </div>
+
     <div class="card">
       <h2>Agent</h2>
       <label>Powitanie<textarea name="greeting">{{s.greeting}}</textarea></label>
@@ -146,6 +157,29 @@ PersistentKeepalive = 25"></textarea>
       el.className=j.ok?'ok':'err';
       if(j.ok) document.getElementById('wgConfig').value='';
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
+  }
+
+  async function changePassword(){
+    const el=document.getElementById('passwordResult');
+    const fd=new FormData();
+    fd.append('current_password',document.getElementById('currentPassword').value);
+    fd.append('new_password',document.getElementById('newPassword').value);
+    fd.append('new_password_repeat',document.getElementById('newPasswordRepeat').value);
+    el.textContent=' zapisuję...';
+    try{
+      const r=await fetch('/api/change-password',{method:'POST',body:fd});
+      const j=await r.json();
+      el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.message?' — '+j.message:'');
+      el.className=j.ok?'ok':'err';
+      if(j.ok){
+        document.getElementById('currentPassword').value='';
+        document.getElementById('newPassword').value='';
+        document.getElementById('newPasswordRepeat').value='';
+      }
+    }catch(e){
+      el.textContent=' BŁĄD — '+e;
+      el.className='err';
+    }
   }
   </script>
 </body>
