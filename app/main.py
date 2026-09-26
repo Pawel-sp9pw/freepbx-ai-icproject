@@ -17,6 +17,7 @@ from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
 from .monitoring import init_db, runtime_status, service_status, linux_resource_status, resource_history, list_calls, get_call
+from .call_registry import register_caller
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +35,7 @@ MODEL_PULL_MODEL_FILE = Path("/var/lib/freepbx-ai/model-pull.model")
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
-    if request.url.path == "/api/health":
+    if request.url.path in ("/api/health", "/api/call/register"):
         return await call_next(request)
 
     expected_password = ""
@@ -64,14 +65,39 @@ async def basic_auth(request: Request, call_next):
 
 templates = Jinja2Templates(directory="/opt/freepbx-ai-icproject/app/templates")
 
+
+def ensure_callerid_api_key():
+    s = load_settings()
+    key = str(s.get("callerid_api_key", "") or "").strip()
+    if not key:
+        key = secrets.token_urlsafe(24)
+        save_settings({"callerid_api_key": key})
+    return key
+
 @app.on_event("startup")
 async def startup():
     init_db()
+    ensure_callerid_api_key()
     asyncio.create_task(start_audiosocket_server())
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/call/register")
+async def register_call_metadata(uuid: str, caller: str = "", token: str = ""):
+    expected = ensure_callerid_api_key()
+    if not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=403, detail="Nieprawidłowy token CallerID.")
+
+    call_id = str(uuid or "").strip()
+    if not call_id:
+        raise HTTPException(status_code=400, detail="Brak UUID rozmowy.")
+
+    caller_digits = "".join(ch for ch in str(caller or "") if ch.isdigit())
+    register_caller(call_id, caller_digits)
+    return {"ok": True, "uuid": call_id, "caller": caller_digits}
 
 
 @app.get("/api/update/status")
@@ -248,6 +274,7 @@ async def save(
     whisper_compute_type: str = Form(...),
     stt_prompt: str = Form(""),
     customer_directory: str = Form(""),
+    callerid_api_key: str = Form(""),
     piper_url: str = Form(...),
     piper_voice: str = Form(...),
     icp_instance: str = Form(""),
@@ -273,6 +300,7 @@ async def save(
         "whisper_compute_type": whisper_compute_type,
         "stt_prompt": stt_prompt,
         "customer_directory": customer_directory,
+        "callerid_api_key": callerid_api_key.strip() or current.get("callerid_api_key", "") or ensure_callerid_api_key(),
         "piper_url": piper_url,
         "piper_voice": piper_voice,
         "icp_instance": icp_instance,
