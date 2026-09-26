@@ -84,6 +84,11 @@ def normalize_company(value: str):
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
+def speak_phone(value: str):
+    digits = re.sub(r"\D", "", value or "")
+    return " ".join(digits) if digits else value
+
+
 def match_customer(company: str, contact: str, directory: list):
     contact_digits = re.sub(r"\D", "", contact or "")
     # Phone match is strongest and can repair a badly recognized company name.
@@ -411,6 +416,7 @@ class CallSession:
         if result.get("done"):
             company = str(self.ticket_data.get("company", "") or "").strip() or "nie podano"
             contact = str(self.ticket_data.get("contact", "") or "").strip() or "nie podano"
+            spoken_contact = speak_phone(contact) if contact != "nie podano" else contact
             description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
 
             self.confirmation_pending = True
@@ -419,7 +425,7 @@ class CallSession:
             await self.say(
                 "Podsumuję zgłoszenie. "
                 f"Firma: {company}. "
-                f"Numer kontaktowy: {contact}. "
+                f"Numer kontaktowy: {spoken_contact}. "
                 f"Problem: {description}. "
                 "Czy dane są poprawne? Proszę powiedzieć tak lub nie."
             )
