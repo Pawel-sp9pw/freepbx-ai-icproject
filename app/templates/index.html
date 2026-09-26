@@ -10,13 +10,71 @@
     label{display:block;font-weight:600;margin-top:12px}input,textarea,select{width:100%;box-sizing:border-box;padding:9px;margin-top:5px;border:1px solid #bbb;border-radius:7px}
     textarea{min-height:120px}button{padding:9px 14px;margin:8px 6px 0 0;border:0;border-radius:7px;cursor:pointer}
     .primary{background:#111;color:#fff}.test{background:#e8edf5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .ok{color:#19712c}.err{color:#a01818}.muted{color:#666;font-size:.92em}
-    @media(max-width:700px){.grid{grid-template-columns:1fr}}
+    .ok{color:#19712c}.err{color:#a01818}.warn{color:#9a6500}.muted{color:#666;font-size:.92em}
+    .status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}
+    .status-box{border:1px solid #ddd;border-radius:9px;padding:10px;background:#fafafa}
+    .status-box strong{display:block;margin-bottom:5px}
+    .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:.85em;background:#eee}
+    .badge.ok{background:#e6f6e9}.badge.err{background:#fdeaea}.badge.warn{background:#fff4d6}
+    table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.92em}
+    th,td{text-align:left;padding:8px;border-bottom:1px solid #e4e4e4;vertical-align:top}
+    .conversation{margin-top:12px;border-top:1px solid #ddd;padding-top:10px}
+    .msg{padding:8px 10px;margin:7px 0;border-radius:8px;background:#f3f4f6;white-space:pre-wrap}
+    .msg.user{background:#eef4ff}.msg.assistant{background:#eef9ee}
+    @media(max-width:700px){.grid{grid-template-columns:1fr} table{font-size:.82em}}
   </style>
 </head>
 <body>
   <h1>FreePBX AI → IC Project</h1>
   <div class="muted">Lokalny voicebot: AudioSocket + Whisper + Ollama + Piper + IC Project</div>
+
+
+  <div class="card">
+    <h2>Monitoring</h2>
+    <div class="status-grid" id="dashboardServices">
+      <div class="status-box"><strong>Ładowanie...</strong><span class="muted">status usług</span></div>
+    </div>
+
+    <div class="status-grid">
+      <div class="status-box">
+        <strong>FreePBX / AudioSocket</strong>
+        <span id="freepbxStatus" class="badge warn">brak danych</span>
+        <div class="muted" id="freepbxDetails" style="margin-top:6px"></div>
+      </div>
+      <div class="status-box">
+        <strong>Aktualna rozmowa</strong>
+        <span id="activeCallStatus" class="badge">sprawdzam...</span>
+        <div class="muted" id="activeCallDetails" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <button type="button" class="test" onclick="refreshDashboard()">Odśwież monitoring</button>
+    <span id="dashboardResult"></span>
+  </div>
+
+  <div class="card">
+    <h2>Rozmowy</h2>
+    <p class="muted">Historia jest zapisywana lokalnie w SQLite od momentu instalacji tej wersji.</p>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Start</th>
+            <th>FreePBX</th>
+            <th>Status</th>
+            <th>Czas</th>
+            <th>Wiadomości</th>
+            <th>Zgłoszenie</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="callsTable">
+          <tr><td colspan="7" class="muted">Ładowanie...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="callDetails" class="conversation" style="display:none"></div>
+  </div>
 
   {% if request.query_params.get('saved') %}
   <p class="ok">Ustawienia zapisane.</p>
@@ -182,6 +240,125 @@ PersistentKeepalive = 25"></textarea>
   </form>
 
   <script>
+  function esc(value){
+    return String(value ?? '').replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  function formatDate(value){
+    if(!value) return '—';
+    try{return new Date(value).toLocaleString('pl-PL');}catch(e){return value;}
+  }
+
+  function formatDuration(sec){
+    sec=Number(sec || 0);
+    if(sec<60) return sec+' s';
+    const m=Math.floor(sec/60), s=sec%60;
+    return m+' min '+s+' s';
+  }
+
+  async function refreshDashboard(){
+    const result=document.getElementById('dashboardResult');
+    try{
+      const r=await fetch('/api/dashboard/status',{cache:'no-store'});
+      const j=await r.json();
+
+      const services=document.getElementById('dashboardServices');
+      services.innerHTML=(j.services || []).map(s =>
+        '<div class="status-box"><strong>'+esc(s.label)+'</strong>'+
+        '<span class="badge '+(s.ok?'ok':'err')+'">'+esc(s.state)+'</span>'+
+        '<div class="muted" style="margin-top:5px">'+esc(s.unit)+'</div></div>'
+      ).join('');
+
+      const fp=document.getElementById('freepbxStatus');
+      const fpd=document.getElementById('freepbxDetails');
+      if(j.active_count>0){
+        fp.textContent='połączony — trwa rozmowa';
+        fp.className='badge ok';
+      }else if(j.freepbx_last_seen){
+        fp.textContent='ostatnio widziany';
+        fp.className='badge warn';
+      }else{
+        fp.textContent='brak połączeń';
+        fp.className='badge err';
+      }
+      fpd.textContent=(j.freepbx_last_peer ? 'Peer: '+j.freepbx_last_peer+' · ' : '')+
+        (j.freepbx_last_seen ? 'ostatnio: '+formatDate(j.freepbx_last_seen) : 'FreePBX nie połączył się jeszcze z AudioSocket');
+
+      const ac=document.getElementById('activeCallStatus');
+      const acd=document.getElementById('activeCallDetails');
+      if(j.active_count>0){
+        ac.textContent=j.active_count===1?'TRWA ROZMOWA':'TRWAJĄ '+j.active_count+' ROZMOWY';
+        ac.className='badge ok';
+        acd.innerHTML=(j.active_calls || []).map(x =>
+          esc(x.peer_ip || '')+' · '+esc(x.call_id)+' · od '+esc(formatDate(x.started_at))
+        ).join('<br>');
+      }else{
+        ac.textContent='brak aktywnej rozmowy';
+        ac.className='badge';
+        acd.textContent='';
+      }
+      result.textContent=' odświeżono';
+      result.className='muted';
+    }catch(e){
+      result.textContent=' BŁĄD — '+e;
+      result.className='err';
+    }
+  }
+
+  async function refreshCalls(){
+    const body=document.getElementById('callsTable');
+    try{
+      const r=await fetch('/api/calls?limit=30',{cache:'no-store'});
+      const j=await r.json();
+      const items=j.items || [];
+      if(!items.length){
+        body.innerHTML='<tr><td colspan="7" class="muted">Brak zapisanych rozmów.</td></tr>';
+        return;
+      }
+      body.innerHTML=items.map(c =>
+        '<tr>'+
+        '<td>'+esc(formatDate(c.started_at))+'</td>'+
+        '<td>'+esc(c.peer_ip || '—')+'</td>'+
+        '<td>'+esc(c.status || '—')+'</td>'+
+        '<td>'+esc(formatDuration(c.duration_seconds))+'</td>'+
+        '<td>'+esc(c.message_count ?? 0)+'</td>'+
+        '<td>'+esc(c.ticket_ref || '—')+'</td>'+
+        '<td><button type="button" class="test" onclick="showCall(\''+esc(c.call_id)+'\')">Podgląd</button></td>'+
+        '</tr>'
+      ).join('');
+    }catch(e){
+      body.innerHTML='<tr><td colspan="7" class="err">Błąd: '+esc(e)+'</td></tr>';
+    }
+  }
+
+  async function showCall(callId){
+    const box=document.getElementById('callDetails');
+    box.style.display='block';
+    box.innerHTML='<span class="muted">Ładowanie rozmowy...</span>';
+    try{
+      const r=await fetch('/api/calls/'+encodeURIComponent(callId),{cache:'no-store'});
+      const c=await r.json();
+      if(!r.ok) throw new Error(c.detail || 'Błąd pobierania rozmowy');
+      let html='<h3>Rozmowa '+esc(c.call_id)+'</h3>'+
+        '<div class="muted">FreePBX: '+esc(c.peer_ip || '—')+
+        ' · start: '+esc(formatDate(c.started_at))+
+        ' · koniec: '+esc(formatDate(c.ended_at))+
+        ' · status: '+esc(c.status || '—')+
+        (c.ticket_ref ? ' · zgłoszenie: '+esc(c.ticket_ref) : '')+
+        '</div>';
+      for(const m of (c.messages || [])){
+        const cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'');
+        const who=m.role==='user'?'Klient':(m.role==='assistant'?'Agent':m.role);
+        html+='<div class="msg '+cls+'"><strong>'+esc(who)+'</strong><br>'+esc(m.content)+'</div>';
+      }
+      box.innerHTML=html;
+    }catch(e){
+      box.innerHTML='<span class="err">BŁĄD — '+esc(e)+'</span>';
+    }
+  }
+
   function icpAuthForm(){
     const fd=new FormData();
     fd.append('icp_instance',document.querySelector('[name="icp_instance"]').value);
@@ -357,6 +534,9 @@ PersistentKeepalive = 25"></textarea>
       }
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
+
+  setTimeout(()=>{refreshDashboard();refreshCalls();},200);
+  setInterval(()=>{refreshDashboard();refreshCalls();},5000);
 
   async function changePassword(){
     const el=document.getElementById('passwordResult');
