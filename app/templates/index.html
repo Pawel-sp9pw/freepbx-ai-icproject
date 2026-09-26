@@ -199,6 +199,26 @@
         Jeden klient w wierszu: <code>Nazwa firmy | numer telefonu</code>. Agent użyje listy do dopasowania
         rozpoznanej nazwy/numeru oraz jako dodatkowej podpowiedzi STT.
       </div>
+
+      <label>Token CallerID z FreePBX
+        <input name="callerid_api_key" value="{{s.callerid_api_key}}" readonly>
+      </label>
+      <div class="muted">
+        Token służy wyłącznie do przekazania UUID i numeru dzwoniącego z Asteriska do agenta.
+      </div>
+      <label>Przykład do <code>extensions_custom.conf</code>
+        <textarea readonly style="min-height:170px">[ai-icproject]
+exten => s,1,NoOp(AI IC Project Agent)
+ same => n,Answer()
+ same => n,Set(AI_UUID=${UUID()})
+ same => n,Set(AI_CALLER=${CALLERID(num)})
+ same => n,Set(CURLOPT(conntimeout)=2)
+ same => n,Set(CURLOPT(httptimeout)=3)
+ same => n,Set(AI_REG=${CURL(http://10.0.0.21:8080/api/call/register?uuid=${AI_UUID}&caller=${AI_CALLER}&token={{s.callerid_api_key}})})
+ same => n,NoOp(AI CallerID registration: ${AI_REG})
+ same => n,AudioSocket(${AI_UUID},10.0.0.21:9019)
+ same => n,Hangup()</textarea>
+      </label>
     </div>
 
     <div class="card">
