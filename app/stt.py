@@ -49,6 +49,7 @@ def transcribe_pcm16(
     device="cpu",
     compute_type="int8",
     sample_rate=8000,
+    initial_prompt="",
 ):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         path = Path(f.name)
@@ -75,6 +76,7 @@ def transcribe_pcm16(
             no_speech_threshold=0.6,
             log_prob_threshold=-1.0,
             compression_ratio_threshold=2.4,
+            initial_prompt=initial_prompt or None,
         )
 
         text = " ".join(s.text.strip() for s in segments).strip()
