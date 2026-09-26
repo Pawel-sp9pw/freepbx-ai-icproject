@@ -86,7 +86,12 @@ async def save(
     piper_voice: str = Form(...),
     icp_instance: str = Form(""),
     icp_token: str = Form(""),
+    icp_project_id: str = Form(""),
+    icp_project_name: str = Form(""),
+    icp_board_slug: str = Form(""),
+    icp_board_name: str = Form(""),
     icp_board_column: str = Form(""),
+    icp_board_column_name: str = Form(""),
     icp_priority: str = Form("normal"),
     greeting: str = Form(...),
     system_prompt: str = Form(...),
@@ -103,7 +108,12 @@ async def save(
         "piper_url": piper_url,
         "piper_voice": piper_voice,
         "icp_instance": icp_instance,
+        "icp_project_id": icp_project_id,
+        "icp_project_name": icp_project_name,
+        "icp_board_slug": icp_board_slug,
+        "icp_board_name": icp_board_name,
         "icp_board_column": icp_board_column,
+        "icp_board_column_name": icp_board_column_name,
         "icp_priority": icp_priority,
         "greeting": greeting,
         "system_prompt": system_prompt,
@@ -132,6 +142,53 @@ async def test_icp(
     client = ICProjectClient(instance, token, board_column)
     ok, message = await client.test()
     return {"ok": ok, "message": message}
+
+
+def _icp_client_from_form(instance: str = "", token: str = "", board_column: str = ""):
+    s = load_settings()
+    resolved_instance = instance.strip() or s.get("icp_instance", "")
+    resolved_token = token.strip() or decrypt_secret(s.get("icp_token_enc", ""))
+    resolved_column = board_column.strip() or s.get("icp_board_column", "")
+    return ICProjectClient(resolved_instance, resolved_token, resolved_column)
+
+
+@app.post("/api/icp/projects")
+async def icp_projects(
+    icp_instance: str = Form(""),
+    icp_token: str = Form(""),
+):
+    try:
+        client = _icp_client_from_form(icp_instance, icp_token)
+        return {"ok": True, "items": await client.list_projects()}
+    except Exception as e:
+        return {"ok": False, "message": str(e), "items": []}
+
+
+@app.post("/api/icp/boards")
+async def icp_boards(
+    project_id: str = Form(...),
+    icp_instance: str = Form(""),
+    icp_token: str = Form(""),
+):
+    try:
+        client = _icp_client_from_form(icp_instance, icp_token)
+        return {"ok": True, "items": await client.list_boards(project_id)}
+    except Exception as e:
+        return {"ok": False, "message": str(e), "items": []}
+
+
+@app.post("/api/icp/columns")
+async def icp_columns(
+    board_slug: str = Form(...),
+    icp_instance: str = Form(""),
+    icp_token: str = Form(""),
+):
+    try:
+        client = _icp_client_from_form(icp_instance, icp_token)
+        return {"ok": True, "items": await client.list_board_columns(board_slug)}
+    except Exception as e:
+        return {"ok": False, "message": str(e), "items": []}
+
 
 @app.post("/api/test/ollama")
 async def test_ollama():
