@@ -78,6 +78,25 @@
       </div>
     </div>
 
+    <div id="resourceAlerts" style="margin-top:12px"></div>
+
+    <div class="status-grid">
+      <div class="status-box">
+        <strong>Zużycie per proces</strong>
+        <div id="processUsage" class="muted">Ładowanie...</div>
+      </div>
+      <div class="status-box">
+        <strong>Temperatura</strong>
+        <div id="resourceTemp">brak danych</div>
+      </div>
+    </div>
+
+    <div class="status-box" style="margin-top:12px">
+      <strong>Historia zasobów — 24 h</strong>
+      <div class="muted">CPU / RAM / dysk, próbka co ok. 30 s</div>
+      <div id="resourceHistoryChart" style="margin-top:8px"></div>
+    </div>
+
     <button type="button" class="test" onclick="refreshDashboard()">Odśwież monitoring</button>
     <span id="dashboardResult"></span>
   </div>
@@ -122,6 +141,32 @@
   {% endif %}
 
   <form method="post" action="/save">
+    <div class="card">
+      <h2>Profil wydajności</h2>
+      <p class="muted">
+        Szybki profil jest przeznaczony dla 4 vCPU bez GPU. Zmiana zapisuje modele w konfiguracji
+        i uruchamia pobieranie wybranego modelu Ollama w tle.
+      </p>
+      <div class="grid">
+        <div class="status-box">
+          <strong>Szybki</strong>
+          <div class="muted">Qwen3 1.7B + Whisper base / int8</div>
+          <button type="button" class="test" onclick="applyPerformanceProfile('fast')">Ustaw szybki</button>
+        </div>
+        <div class="status-box">
+          <strong>Zbalansowany</strong>
+          <div class="muted">Qwen3 4B + Whisper small / int8</div>
+          <button type="button" class="test" onclick="applyPerformanceProfile('balanced')">Ustaw zbalansowany</button>
+        </div>
+        <div class="status-box">
+          <strong>Bardzo szybki</strong>
+          <div class="muted">Qwen3 0.6B + Whisper tiny / int8 — niższa jakość</div>
+          <button type="button" class="test" onclick="applyPerformanceProfile('very_fast')">Ustaw bardzo szybki</button>
+        </div>
+      </div>
+      <div id="performanceProfileResult" class="muted" style="margin-top:8px"></div>
+    </div>
+
     <div class="card">
       <h2>LLM / Ollama</h2>
       <div class="grid">
@@ -348,6 +393,28 @@ PersistentKeepalive = 25"></textarea>
       setBar('resourceRamBar',res.ram_percent);
       setBar('resourceDiskBar',res.disk_percent);
 
+      const processBox=document.getElementById('processUsage');
+      processBox.innerHTML=(res.processes || []).map(p =>
+        '<div style="margin:5px 0"><strong>'+esc(p.label)+'</strong>: '+
+        esc(p.cpu_percent)+'% CPU · '+esc(formatBytes(p.rss))+' RAM'+
+        (p.count>1?' · '+esc(p.count)+' procesy':'')+'</div>'
+      ).join('') || 'brak danych';
+
+      document.getElementById('resourceTemp').textContent=
+        res.temperature_c==null ? 'brak danych w LXC' : res.temperature_c+' °C';
+
+      const alerts=[];
+      if(Number(res.cpu_percent)>=90) alerts.push('CPU ≥ 90%');
+      if(Number(res.ram_percent)>=85) alerts.push('RAM ≥ 85%');
+      if(Number(res.disk_percent)>=90) alerts.push('Dysk ≥ 90%');
+      if(res.temperature_c!=null && Number(res.temperature_c)>=80) alerts.push('Temperatura ≥ 80°C');
+      const alertBox=document.getElementById('resourceAlerts');
+      if(alerts.length){
+        alertBox.innerHTML='<div class="badge err">Uwaga: '+alerts.map(esc).join(' · ')+'</div>';
+      }else{
+        alertBox.innerHTML='<span class="badge ok">Zasoby w normie</span>';
+      }
+
       const fp=document.getElementById('freepbxStatus');
       const fpd=document.getElementById('freepbxDetails');
       if(j.active_count>0){
@@ -510,6 +577,72 @@ PersistentKeepalive = 25"></textarea>
       status.textContent=' BŁĄD — '+e;
       status.className='err';
       button.disabled=false;
+    }
+  }
+
+  function renderHistoryChart(items){
+    const box=document.getElementById('resourceHistoryChart');
+    if(!box) return;
+    if(!items || items.length<2){
+      box.innerHTML='<span class="muted">Za mało danych historycznych.</span>';
+      return;
+    }
+
+    const width=900, height=180, pad=20;
+    const fields=[
+      ['cpu_percent','CPU'],
+      ['ram_percent','RAM'],
+      ['disk_percent','Dysk']
+    ];
+
+    const paths=fields.map(([field,label],idx)=>{
+      const pts=items.map((x,i)=>{
+        const px=pad+(i/(items.length-1))*(width-pad*2);
+        const py=height-pad-(Number(x[field]||0)/100)*(height-pad*2);
+        return px.toFixed(1)+','+py.toFixed(1);
+      }).join(' ');
+      return '<polyline fill="none" stroke="currentColor" stroke-width="'+(idx===0?3:2)+'" opacity="'+(1-idx*0.2)+'" points="'+pts+'"></polyline>';
+    }).join('');
+
+    box.innerHTML=
+      '<svg viewBox="0 0 '+width+' '+height+'" style="width:100%;height:180px;background:#fafafa;border:1px solid #eee;border-radius:8px">'+
+      '<line x1="'+pad+'" y1="'+(height/2)+'" x2="'+(width-pad)+'" y2="'+(height/2)+'" stroke="#ddd"></line>'+
+      paths+
+      '</svg>'+
+      '<div class="muted">Linie: CPU / RAM / Dysk (0–100%)</div>';
+  }
+
+  async function refreshResourceHistory(){
+    try{
+      const r=await fetch('/api/resources/history?hours=24',{cache:'no-store'});
+      const j=await r.json();
+      renderHistoryChart(j.items || []);
+    }catch(e){}
+  }
+
+  async function applyPerformanceProfile(profile){
+    const el=document.getElementById('performanceProfileResult');
+    const fd=new FormData();
+    fd.append('profile',profile);
+    el.textContent=' ustawiam profil...';
+    el.className='warn';
+    try{
+      const r=await fetch('/api/performance/profile',{method:'POST',body:fd});
+      const j=await r.json();
+      if(!j.ok) throw new Error(j.message || 'Nie udało się ustawić profilu.');
+      const ollama=document.querySelector('[name="ollama_model"]');
+      const whisper=document.querySelector('[name="whisper_model"]');
+      const device=document.querySelector('[name="whisper_device"]');
+      const compute=document.querySelector('[name="whisper_compute_type"]');
+      if(ollama) ollama.value=j.ollama_model;
+      if(whisper) whisper.value=j.whisper_model;
+      if(device) device.value=j.whisper_device;
+      if(compute) compute.value=j.whisper_compute_type;
+      el.textContent=' OK — '+j.message;
+      el.className='ok';
+    }catch(e){
+      el.textContent=' BŁĄD — '+e.message;
+      el.className='err';
     }
   }
 
@@ -689,8 +822,9 @@ PersistentKeepalive = 25"></textarea>
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
 
-  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();},200);
+  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshResourceHistory();},200);
   setInterval(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();},5000);
+  setInterval(()=>{refreshResourceHistory();},30000);
 
   async function changePassword(){
     const el=document.getElementById('passwordResult');
