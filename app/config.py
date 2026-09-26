@@ -14,6 +14,7 @@ DEFAULTS = {
     "whisper_device": "cpu",
     "whisper_compute_type": "int8",
     "stt_prompt": "Rozmowa serwisowa po polsku. Nazwa firmy, numer telefonu, opis problemu.",
+    "customer_directory": "",
     "piper_url": "http://127.0.0.1:5000",
     "piper_voice": "pl_PL-mc_speech-medium",
     "icp_instance": "",
