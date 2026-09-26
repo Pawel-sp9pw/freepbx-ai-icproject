@@ -754,7 +754,9 @@ class CallSession:
             await self.say("Wystąpił chwilowy problem z systemem. Proszę spróbować ponownie.")
             return
 
-        reply = result.get("reply") or "Dziękuję."
+        # LLM output is used only as a parser. The model is not allowed to
+        # choose arbitrary customer-facing speech.
+        reply = ""
         ticket_update = result.get("ticket") or {}
 
         # General LLM fallback is fill-only. It may add a missing field but it
@@ -810,13 +812,29 @@ class CallSession:
         company_ok = bool(str(self.ticket_data.get("company", "")).strip())
         contact_ok = bool(str(self.ticket_data.get("contact", "")).strip())
         description_ok = bool(str(self.ticket_data.get("description", "")).strip())
+
+        # Backend owns the conversation state and every spoken response.
+        # The LLM cannot move the call to an unrelated topic.
         if company_ok and contact_ok and description_ok:
             result["done"] = True
-            # Once the ticket is complete, do not trust a small LLM to produce
-            # a clean final utterance; use a deterministic customer-facing line.
             reply = "Dziękuję, mam potrzebne informacje."
         else:
             result["done"] = False
+            self.awaiting_company = False
+            self.awaiting_contact = False
+            self.awaiting_problem = False
+
+            if not company_ok:
+                self.awaiting_company = True
+                reply = "Proszę podać nazwę firmy."
+            elif not contact_ok:
+                self.awaiting_contact = True
+                reply = "Proszę podać numer telefonu kontaktowego."
+            elif not description_ok:
+                self.awaiting_problem = True
+                reply = "Proszę opisać problem."
+            else:
+                reply = "Proszę podać informacje dotyczące bieżącego zgłoszenia."
 
         self.history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
 
