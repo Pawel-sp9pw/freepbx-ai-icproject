@@ -319,8 +319,13 @@ class CallSession:
                 self.settings["whisper_compute_type"],
                 8000,
                 (
-                    self.settings.get("stt_prompt", "")
-                    + (" Klienci: " + ", ".join(x["name"] for x in self.customer_directory) if self.customer_directory else "")
+                    "Krótka odpowiedź na pytanie o potwierdzenie. "
+                    "Oczekiwane odpowiedzi: tak, nie, zgadza się, nie zgadza się, potwierdzam."
+                    if self.confirmation_pending
+                    else (
+                        self.settings.get("stt_prompt", "")
+                        + (" Klienci: " + ", ".join(x["name"] for x in self.customer_directory) if self.customer_directory else "")
+                    )
                 ),
             )
         except Exception:
