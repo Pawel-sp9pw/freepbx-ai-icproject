@@ -187,6 +187,10 @@
         <div><label>Compute type<input name="whisper_compute_type" value="{{s.whisper_compute_type}}"></label></div>
         <div><label>Cisza kończąca wypowiedź [ms]<input type="number" name="silence_ms" value="{{s.silence_ms}}"></label></div>
       </div>
+      <label>Słownik / podpowiedzi STT
+        <textarea name="stt_prompt" placeholder="Np. Virtual World, PCMED, MediQus, P1, NFZ, e-recepta">{{s.stt_prompt}}</textarea>
+      </label>
+      <div class="muted">Wpisz nazwy klientów, produktów i skróty, które agent ma lepiej rozpoznawać.</div>
     </div>
 
     <div class="card">
