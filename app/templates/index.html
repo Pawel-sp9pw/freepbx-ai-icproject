@@ -53,6 +53,17 @@
   </div>
 
   <div class="card">
+    <h2>Aktualizacja</h2>
+    <p class="muted">
+      Aktualizuje kod agenta i panelu z repozytorium GitHub, zależności Python oraz jednostki systemd.
+      Ustawienia lokalne i baza rozmów nie są usuwane.
+    </p>
+    <button type="button" class="test" id="updateButton" onclick="startUpdate()">Aktualizuj agenta i panel</button>
+    <span id="updateStatus" class="muted">bez uruchomionej aktualizacji</span>
+    <pre id="updateLog" style="display:none;max-height:280px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
+  </div>
+
+  <div class="card">
     <h2>Rozmowy</h2>
     <p class="muted">Historia jest zapisywana lokalnie w SQLite od momentu instalacji tej wersji.</p>
     <div style="overflow-x:auto">
@@ -359,6 +370,83 @@ PersistentKeepalive = 25"></textarea>
     }
   }
 
+  async function refreshUpdateStatus(){
+    const status=document.getElementById('updateStatus');
+    const button=document.getElementById('updateButton');
+    const log=document.getElementById('updateLog');
+    if(!status || !button || !log) return;
+
+    try{
+      const r=await fetch('/api/update/status',{cache:'no-store'});
+      const j=await r.json();
+      const state=j.state || 'idle';
+
+      if(state==='running' || state==='starting'){
+        status.textContent=' aktualizacja trwa...';
+        status.className='warn';
+        button.disabled=true;
+      }else if(state==='success'){
+        status.textContent=' aktualizacja zakończona pomyślnie';
+        status.className='ok';
+        button.disabled=false;
+      }else if(state.startsWith('error')){
+        status.textContent=' aktualizacja zakończona błędem';
+        status.className='err';
+        button.disabled=false;
+      }else{
+        status.textContent=' brak uruchomionej aktualizacji';
+        status.className='muted';
+        button.disabled=false;
+      }
+
+      if(j.log){
+        log.style.display='block';
+        log.textContent=j.log;
+        log.scrollTop=log.scrollHeight;
+      }
+    }catch(e){
+      status.textContent=' nie udało się pobrać statusu aktualizacji';
+      status.className='err';
+      button.disabled=false;
+    }
+  }
+
+  async function startUpdate(){
+    if(!confirm('Uruchomić aktualizację agenta i panelu? Usługa zostanie zrestartowana.')) return;
+
+    const status=document.getElementById('updateStatus');
+    const button=document.getElementById('updateButton');
+    button.disabled=true;
+    status.textContent=' uruchamianie...';
+    status.className='warn';
+
+    try{
+      const r=await fetch('/api/update/start',{method:'POST'});
+      const j=await r.json();
+      if(!j.ok){
+        status.textContent=' BŁĄD — '+(j.message || 'nie udało się uruchomić aktualizacji');
+        status.className='err';
+        button.disabled=false;
+        return;
+      }
+      status.textContent=' aktualizacja uruchomiona';
+      status.className='warn';
+
+      const poll=setInterval(async ()=>{
+        await refreshUpdateStatus();
+        const text=document.getElementById('updateStatus').textContent || '';
+        if(text.includes('zakończona')){
+          clearInterval(poll);
+          setTimeout(()=>location.reload(),1500);
+        }
+      },2000);
+    }catch(e){
+      status.textContent=' BŁĄD — '+e;
+      status.className='err';
+      button.disabled=false;
+    }
+  }
+
   function icpAuthForm(){
     const fd=new FormData();
     fd.append('icp_instance',document.querySelector('[name="icp_instance"]').value);
@@ -535,8 +623,8 @@ PersistentKeepalive = 25"></textarea>
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
 
-  setTimeout(()=>{refreshDashboard();refreshCalls();},200);
-  setInterval(()=>{refreshDashboard();refreshCalls();},5000);
+  setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();},200);
+  setInterval(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();},5000);
 
   async function changePassword(){
     const el=document.getElementById('passwordResult');
