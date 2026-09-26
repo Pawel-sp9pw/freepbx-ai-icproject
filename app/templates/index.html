@@ -19,6 +19,9 @@
     table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.92em}
     th,td{text-align:left;padding:8px;border-bottom:1px solid #e4e4e4;vertical-align:top}
     .conversation{margin-top:12px;border-top:1px solid #ddd;padding-top:10px}
+    .call-details-row td{background:#fafbfc;padding:0 12px 14px 12px;border-bottom:1px solid #d8dce2}
+    .call-details-inline{padding:12px 4px 2px 4px}
+    .call-row-expanded td{background:#f7f9fc}
     .msg{padding:8px 10px;margin:7px 0;border-radius:8px;background:#f3f4f6;white-space:pre-wrap}
     .msg.user{background:#eef4ff}.msg.assistant{background:#eef9ee}
     @media(max-width:700px){.grid{grid-template-columns:1fr} table{font-size:.82em}}
@@ -133,7 +136,6 @@
         </tbody>
       </table>
     </div>
-    <div id="callDetails" class="conversation" style="display:none"></div>
   </div>
 
   {% if request.query_params.get('saved') %}
@@ -492,41 +494,23 @@ PersistentKeepalive = 25"></textarea>
     }
   }
 
-  async function refreshCalls(){
-    const body=document.getElementById('callsTable');
-    try{
-      const r=await fetch('/api/calls?limit=30',{cache:'no-store'});
-      const j=await r.json();
-      const items=j.items || [];
-      if(!items.length){
-        body.innerHTML='<tr><td colspan="7" class="muted">Brak zapisanych rozmów.</td></tr>';
-        return;
-      }
-      body.innerHTML=items.map(c =>
-        '<tr>'+
-        '<td>'+esc(formatDate(c.started_at))+'</td>'+
-        '<td>'+esc(c.peer_ip || '—')+'</td>'+
-        '<td>'+esc(c.status || '—')+'</td>'+
-        '<td>'+esc(formatDuration(c.duration_seconds))+'</td>'+
-        '<td>'+esc(c.message_count ?? 0)+'</td>'+
-        '<td>'+esc(c.ticket_ref || '—')+'</td>'+
-        '<td><button type="button" class="test" onclick="showCall(\''+esc(c.call_id)+'\')">Podgląd</button></td>'+
-        '</tr>'
-      ).join('');
-    }catch(e){
-      body.innerHTML='<tr><td colspan="7" class="err">Błąd: '+esc(e)+'</td></tr>';
-    }
-  }
+  let expandedCallId=null;
+  let callsRefreshBusy=false;
+  let callDetailsRefreshBusy=false;
 
-  async function showCall(callId){
-    const box=document.getElementById('callDetails');
-    box.style.display='block';
-    box.innerHTML='<span class="muted">Ładowanie rozmowy...</span>';
+  async function loadInlineCallDetails(callId){
+    if(!callId || callDetailsRefreshBusy) return;
+    const box=document.getElementById('callDetails-'+callId);
+    if(!box) return;
+
+    callDetailsRefreshBusy=true;
     try{
       const r=await fetch('/api/calls/'+encodeURIComponent(callId),{cache:'no-store'});
       const c=await r.json();
       if(!r.ok) throw new Error(c.detail || 'Błąd pobierania rozmowy');
-      let html='<h3>Rozmowa '+esc(c.call_id)+'</h3>'+
+
+      let html='<div class="call-details-inline">'+
+        '<div><strong>Rozmowa '+esc(c.call_id)+'</strong></div>'+
         '<div class="muted">FreePBX: '+esc(c.peer_ip || '—')+
         ' · start: '+esc(formatDate(c.started_at))+
         ' · koniec: '+esc(formatDate(c.ended_at))+
@@ -534,14 +518,75 @@ PersistentKeepalive = 25"></textarea>
         (c.ticket_ref ? ' · zgłoszenie: '+esc(c.ticket_ref) : '')+
         '</div>'+
         (c.error ? '<div class="err" style="margin-top:8px"><strong>Błąd:</strong> '+esc(c.error)+'</div>' : '');
+
       for(const m of (c.messages || [])){
         const cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'');
         const who=m.role==='user'?'Klient':(m.role==='assistant'?'Agent':m.role);
         html+='<div class="msg '+cls+'"><strong>'+esc(who)+'</strong><br>'+esc(m.content)+'</div>';
       }
+      html+='</div>';
       box.innerHTML=html;
     }catch(e){
-      box.innerHTML='<span class="err">BŁĄD — '+esc(e)+'</span>';
+      if(box) box.innerHTML='<div class="call-details-inline"><span class="err">BŁĄD — '+esc(e)+'</span></div>';
+    }finally{
+      callDetailsRefreshBusy=false;
+    }
+  }
+
+  async function toggleCall(callId){
+    if(expandedCallId===callId){
+      expandedCallId=null;
+      await refreshCalls();
+      return;
+    }
+    expandedCallId=callId;
+    await refreshCalls();
+  }
+
+  async function refreshCalls(){
+    if(callsRefreshBusy) return;
+    callsRefreshBusy=true;
+    const body=document.getElementById('callsTable');
+    try{
+      const r=await fetch('/api/calls?limit=30',{cache:'no-store'});
+      const j=await r.json();
+      const items=j.items || [];
+      if(!items.length){
+        body.innerHTML='<tr><td colspan="7" class="muted">Brak zapisanych rozmów.</td></tr>';
+        expandedCallId=null;
+        return;
+      }
+
+      let html='';
+      for(const c of items){
+        const expanded=expandedCallId===c.call_id;
+        html+=
+          '<tr class="'+(expanded?'call-row-expanded':'')+'">'+
+          '<td>'+esc(formatDate(c.started_at))+'</td>'+
+          '<td>'+esc(c.peer_ip || '—')+'</td>'+
+          '<td>'+esc(c.status || '—')+'</td>'+
+          '<td>'+esc(formatDuration(c.duration_seconds))+'</td>'+
+          '<td>'+esc(c.message_count ?? 0)+'</td>'+
+          '<td>'+esc(c.ticket_ref || '—')+'</td>'+
+          '<td><button type="button" class="test" onclick="toggleCall(\''+esc(c.call_id)+'\')">'+
+          (expanded?'Zwiń':'Podgląd')+'</button></td>'+
+          '</tr>';
+
+        if(expanded){
+          html+='<tr class="call-details-row"><td colspan="7">'+
+            '<div id="callDetails-'+esc(c.call_id)+'"><span class="muted">Ładowanie rozmowy...</span></div>'+
+            '</td></tr>';
+        }
+      }
+      body.innerHTML=html;
+
+      if(expandedCallId){
+        await loadInlineCallDetails(expandedCallId);
+      }
+    }catch(e){
+      body.innerHTML='<tr><td colspan="7" class="err">Błąd: '+esc(e)+'</td></tr>';
+    }finally{
+      callsRefreshBusy=false;
     }
   }
 
@@ -943,7 +988,12 @@ PersistentKeepalive = 25"></textarea>
   }
 
   setTimeout(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshResourceHistory();refreshModelPullStatus();},200);
-  setInterval(()=>{refreshDashboard();refreshCalls();refreshUpdateStatus();refreshModelPullStatus();},5000);
+
+  // Rozmowy są lekkim endpointem i mogą być odświeżane prawie na żywo.
+  setInterval(()=>{refreshCalls();},1000);
+
+  // Cięższy monitoring pozostaje rzadszy, żeby nie wpływać na AudioSocket/TTS.
+  setInterval(()=>{refreshDashboard();refreshUpdateStatus();refreshModelPullStatus();},5000);
   setInterval(()=>{refreshResourceHistory();},30000);
 
   async function changePassword(){
