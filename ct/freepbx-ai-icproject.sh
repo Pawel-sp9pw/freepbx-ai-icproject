@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 
-# Copyright (c) 2026
-# Inspired by community-scripts.org layout.
-# This is an independent project, not an official Community Scripts entry.
+# Community Scripts' build.func normally downloads application installers only
+# from community-scripts/ProxmoxVE. This project is external, so patch the two
+# installer download URLs while keeping the rest of the upstream LXC builder.
+source <(
+  curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func |
+    sed 's#https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/install/${var_install}.sh#https://raw.githubusercontent.com/Pawel-sp9pw/freepbx-ai-icproject/main/install/${var_install}.sh#g'
+)
 
 APP="FreePBX AI ICProject"
 var_tags="ai;freepbx;asterisk;icproject"
@@ -17,6 +20,12 @@ var_unprivileged="1"
 header_info "$APP"
 base_settings
 variables
+
+# Do not let variables() derive this from the human-readable APP name.
+# Our installer is: install/freepbx-ai-icproject-install.sh
+NSAPP="freepbx-ai-icproject"
+var_install="${NSAPP}-install"
+
 color
 catch_errors
 
