@@ -6,7 +6,7 @@ VENV="/opt/freepbx-ai/.venv"
 
 apt-get update
 apt-get install -y \
-  ca-certificates curl git caddy ffmpeg build-essential python3 python3-venv python3-pip wireguard-tools
+  ca-certificates curl git caddy ffmpeg build-essential python3 python3-venv python3-pip wireguard-tools openresolv
 
 mkdir -p /opt/freepbx-ai /var/lib/freepbx-ai/piper /etc/freepbx-ai
 
