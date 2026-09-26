@@ -153,6 +153,9 @@ class CallSession:
         self.confirmation_pending = False
         self.awaiting_correction = False
         self.correction_field = ""
+        self.correction_attempts = 0
+        self.original_caller = ""
+        self.caller_matched_customer = False
         self.awaiting_company = False
         self.awaiting_contact = False
         self.awaiting_problem = False
@@ -201,8 +204,16 @@ class CallSession:
         await asyncio.sleep(0.35)
         await self.say("Proszę powiedzieć tak, jeśli dane są poprawne, albo nie, jeśli wymagają poprawy.")
 
-    async def finalize_ticket(self):
+    async def finalize_ticket(self, uncertain=False):
         ticket = dict(self.ticket_data)
+        if uncertain:
+            warning = (
+                "UWAGA: Agent głosowy nie zdołał jednoznacznie potwierdzić danych po 3 próbach poprawki. "
+                "Wymagany kontakt zwrotny z osobą zgłaszającą w celu doprecyzowania zgłoszenia."
+            )
+            existing_summary = str(ticket.get("summary", "") or "").strip()
+            ticket["summary"] = (existing_summary + "\n" + warning).strip()
+            ticket["uncertain_transcription"] = True
         try:
             token = decrypt_secret(self.settings.get("icp_token_enc", ""))
             client = ICProjectClient(
@@ -214,8 +225,15 @@ class CallSession:
             ticket_no = created.get("number") or created.get("shortCode") or ""
             suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
             self.ticket_ref = str(ticket_no or created.get("id") or "")
-            self.final_status = "completed"
-            await self.say("Dziękuję. Zgłoszenie zostało zapisane." + suffix + " Do widzenia.")
+            self.final_status = "completed_uncertain" if uncertain else "completed"
+            if uncertain:
+                await self.say(
+                    "Dziękuję. Zgłoszenie zostało przyjęte." + suffix +
+                    " Nie udało mi się dokładnie rozpoznać wszystkich poprawek. "
+                    "Ktoś z serwisu skontaktuje się w celu doprecyzowania. Do widzenia."
+                )
+            else:
+                await self.say("Dziękuję. Zgłoszenie zostało zapisane." + suffix + " Do widzenia.")
             self.closed = True
             await asyncio.sleep(0.3)
             self.writer.close()
@@ -544,6 +562,14 @@ class CallSession:
 
             self.awaiting_correction = False
             self.correction_field = ""
+            self.correction_attempts += 1
+
+            if self.correction_attempts >= 3:
+                self.confirmation_pending = False
+                self.confirmation_misses = 0
+                await self.finalize_ticket(uncertain=True)
+                return
+
             self.confirmation_pending = True
             self.confirmation_misses = 0
             await self.say_confirmation_summary()
@@ -787,6 +813,7 @@ async def handle_client(reader, writer):
         if registered_caller:
             caller_digits = re.sub(r"\D", "", registered_caller)
             if caller_digits:
+                session.original_caller = caller_digits
                 session.ticket_data["contact"] = caller_digits
                 matched_customer, match_score = match_customer(
                     "",
@@ -794,9 +821,14 @@ async def handle_client(reader, writer):
                     session.customer_directory,
                 )
                 if matched_customer:
+                    session.caller_matched_customer = True
                     session.ticket_data["company"] = matched_customer["name"]
                     if matched_customer.get("phone"):
                         session.ticket_data["contact"] = matched_customer["phone"]
+                else:
+                    # Preserve the actual inbound CallerID separately from any
+                    # contact number later recognized or corrected by STT.
+                    session.ticket_data["caller"] = caller_digits
                 log.info(
                     "[%s] CallerID registered: %s%s",
                     call_id,
