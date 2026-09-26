@@ -164,19 +164,6 @@ async def icp_projects(
         return {"ok": False, "message": str(e), "items": []}
 
 
-@app.post("/api/icp/boards")
-async def icp_boards(
-    project_id: str = Form(...),
-    icp_instance: str = Form(""),
-    icp_token: str = Form(""),
-):
-    try:
-        client = _icp_client_from_form(icp_instance, icp_token)
-        return {"ok": True, "items": await client.list_boards(project_id)}
-    except Exception as e:
-        return {"ok": False, "message": str(e), "items": []}
-
-
 @app.post("/api/icp/columns")
 async def icp_columns(
     board_slug: str = Form(...),
