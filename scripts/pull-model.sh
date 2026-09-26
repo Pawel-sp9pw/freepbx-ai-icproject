@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+export HOME="${HOME:-/root}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$HOME" "$XDG_CACHE_HOME"
+
 MODEL="${1:?Brak nazwy modelu}"
 STATE="/var/lib/freepbx-ai/model-pull.state"
 LOG="/var/lib/freepbx-ai/model-pull.log"
