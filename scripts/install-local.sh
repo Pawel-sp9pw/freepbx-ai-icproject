@@ -35,13 +35,8 @@ if [[ ! -f /etc/freepbx-ai/admin-password ]]; then
   chmod 600 /etc/freepbx-ai/admin-password
 fi
 
-ADMIN_PASSWORD="$(cat /etc/freepbx-ai/admin-password)"
-ADMIN_HASH="$(caddy hash-password --plaintext "$ADMIN_PASSWORD")"
-cat >/etc/caddy/Caddyfile <<EOF
+cat >/etc/caddy/Caddyfile <<'EOF'
 :8080 {
-    basic_auth {
-        admin ${ADMIN_HASH}
-    }
     reverse_proxy 127.0.0.1:8000
 }
 EOF
