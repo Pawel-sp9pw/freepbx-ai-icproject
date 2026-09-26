@@ -218,8 +218,9 @@ class CallSession:
         description_ok = bool(str(self.ticket_data.get("description", "")).strip())
         if company_ok and description_ok:
             result["done"] = True
-            if reply.lower().startswith("proszę podać opis problemu"):
-                reply = "Dziękuję, mam potrzebne informacje."
+            # Once the ticket is complete, do not trust a small LLM to produce
+            # a clean final utterance; use a deterministic customer-facing line.
+            reply = "Dziękuję, mam potrzebne informacje."
 
         self.history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
 
