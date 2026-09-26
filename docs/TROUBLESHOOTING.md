@@ -46,3 +46,30 @@ pct exec 101 -- journalctl -u freepbx-ai -n 100 --no-pager
 pct exec 101 -- journalctl -u piper-ai -n 100 --no-pager
 pct exec 101 -- journalctl -u caddy -n 100 --no-pager
 ```
+
+
+## Caddy: unrecognized directive basic_auth
+
+Na Debian 13 pakiet systemowy może dostarczać Caddy 2.6.x. W tej wersji
+dyrektywa `basic_auth` nie jest dostępna pod tą nazwą.
+
+Projekt nie potrzebuje uwierzytelnienia w Caddy, ponieważ panel ma Basic Auth
+zaimplementowany bezpośrednio w FastAPI.
+
+Naprawa:
+
+```bash
+pct exec 101 -- bash -lc 'cat >/etc/caddy/Caddyfile <<EOF
+:8080 {
+    reverse_proxy 127.0.0.1:8000
+}
+EOF
+caddy validate --config /etc/caddy/Caddyfile
+systemctl restart caddy'
+```
+
+Następnie:
+
+```bash
+pct exec 101 -- ss -tlnp | grep -E ':8080 |:8000 |:9019 '
+```
