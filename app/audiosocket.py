@@ -94,6 +94,13 @@ def extract_phone_digits(value: str):
     return digits if 9 <= len(digits) <= 15 else ""
 
 
+def matches_confirmation_phrase(text: str, phrases: tuple[str, ...]):
+    normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
+    if not normalized:
+        return False
+    return normalized in phrases
+
+
 def company_without_phone(value: str):
     cleaned = re.sub(r"[\d\s,.;:+()\-]{7,}", " ", value or "")
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:-")
@@ -355,16 +362,35 @@ class CallSession:
             return
 
         if self.confirmation_pending:
-            yes_phrases = ("tak", "zgadza się", "zgadza sie", "potwierdzam", "poprawnie", "wszystko się zgadza", "wszystko sie zgadza")
-            no_phrases = ("nie", "nie zgadza", "popraw", "błąd", "blad", "zmień", "zmien")
+            yes_phrases = (
+                "tak",
+                "tak zgadza się",
+                "tak zgadza sie",
+                "zgadza się",
+                "zgadza sie",
+                "potwierdzam",
+                "wszystko się zgadza",
+                "wszystko sie zgadza",
+            )
+            no_phrases = (
+                "nie",
+                "nie zgadza się",
+                "nie zgadza sie",
+                "niepoprawne",
+                "błąd",
+                "blad",
+                "popraw",
+                "zmień",
+                "zmien",
+            )
 
-            if any(p in normalized for p in yes_phrases):
+            if matches_confirmation_phrase(normalized, yes_phrases):
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 await self.finalize_ticket()
                 return
 
-            if any(p in normalized for p in no_phrases):
+            if matches_confirmation_phrase(normalized, no_phrases):
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 self.awaiting_correction = True
@@ -377,15 +403,11 @@ class CallSession:
                 )
                 return
 
-            # Unexpected answer: only now use the LLM as a fallback.
+            # Ambiguous confirmation must never create a ticket.
+            # LLM may help detect a correction/negative intent, but it is not
+            # allowed to turn an unclear transcript into a positive confirmation.
             interpreted = await self.interpret_fallback("potwierdzenie danych tak/nie", text)
             intent = str(interpreted.get("intent", "")).lower()
-
-            if intent == "confirm_yes":
-                self.confirmation_pending = False
-                self.confirmation_misses = 0
-                await self.finalize_ticket()
-                return
 
             if intent in ("confirm_no", "correction"):
                 self.confirmation_pending = False
@@ -398,9 +420,12 @@ class CallSession:
                 return
 
             self.confirmation_misses += 1
-            if self.confirmation_misses >= 2:
+            if self.confirmation_misses >= 1:
                 self.confirmation_misses = 0
-                await self.say("Nie udało mi się rozpoznać odpowiedzi. Proszę powiedzieć tylko: tak albo nie.")
+                await self.say(
+                    "Nie rozpoznałem jednoznacznej odpowiedzi. "
+                    "Proszę powiedzieć tylko: tak albo nie."
+                )
             return
 
         # Fast deterministic state machine for normal calls.
