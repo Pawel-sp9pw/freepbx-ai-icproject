@@ -495,6 +495,8 @@ PersistentKeepalive = 25"></textarea>
   }
 
   let expandedCallId=null;
+  let expandedCallIsActive=false;
+  const callDetailsCache={};
   let callsRefreshBusy=false;
   let callDetailsRefreshBusy=false;
 
@@ -526,6 +528,7 @@ PersistentKeepalive = 25"></textarea>
       }
       html+='</div>';
       box.innerHTML=html;
+      callDetailsCache[callId]=html;
     }catch(e){
       if(box) box.innerHTML='<div class="call-details-inline"><span class="err">BŁĄD — '+esc(e)+'</span></div>';
     }finally{
@@ -536,10 +539,12 @@ PersistentKeepalive = 25"></textarea>
   async function toggleCall(callId){
     if(expandedCallId===callId){
       expandedCallId=null;
+      expandedCallIsActive=false;
       await refreshCalls();
       return;
     }
     expandedCallId=callId;
+    expandedCallIsActive=false;
     await refreshCalls();
   }
 
@@ -560,6 +565,10 @@ PersistentKeepalive = 25"></textarea>
       let html='';
       for(const c of items){
         const expanded=expandedCallId===c.call_id;
+        if(expanded){
+          const status=String(c.status || '').toLowerCase();
+          expandedCallIsActive=(status==='active' || status==='running' || status==='in_progress' || status==='in-progress');
+        }
         html+=
           '<tr class="'+(expanded?'call-row-expanded':'')+'">'+
           '<td>'+esc(formatDate(c.started_at))+'</td>'+
@@ -573,15 +582,19 @@ PersistentKeepalive = 25"></textarea>
           '</tr>';
 
         if(expanded){
+          const cached=callDetailsCache[c.call_id] || '<span class="muted">Ładowanie rozmowy...</span>';
           html+='<tr class="call-details-row"><td colspan="7">'+
-            '<div id="callDetails-'+esc(c.call_id)+'"><span class="muted">Ładowanie rozmowy...</span></div>'+
+            '<div id="callDetails-'+esc(c.call_id)+'">'+cached+'</div>'+
             '</td></tr>';
         }
       }
       body.innerHTML=html;
 
       if(expandedCallId){
-        await loadInlineCallDetails(expandedCallId);
+        const needsInitialLoad=!callDetailsCache[expandedCallId];
+        if(expandedCallIsActive || needsInitialLoad){
+          await loadInlineCallDetails(expandedCallId);
+        }
       }
     }catch(e){
       body.innerHTML='<tr><td colspan="7" class="err">Błąd: '+esc(e)+'</td></tr>';
