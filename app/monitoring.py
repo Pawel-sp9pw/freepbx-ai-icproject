@@ -48,6 +48,17 @@ def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS resource_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                cpu_percent REAL NOT NULL,
+                ram_percent REAL NOT NULL,
+                disk_percent REAL NOT NULL,
+                load_1 REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_resource_samples_created_at
+                ON resource_samples(created_at);
             """
         )
         # If the process was killed/restarted, old "active" rows are no longer active.
@@ -217,7 +228,7 @@ def linux_resource_status():
     load1, load5, load15 = psutil.getloadavg()
     cpu_count = psutil.cpu_count(logical=True) or 1
 
-    return {
+    result = {
         "cpu_percent": round(psutil.cpu_percent(interval=0.15), 1),
         "cpu_count": cpu_count,
         "load_1": round(load1, 2),
@@ -234,4 +245,126 @@ def linux_resource_status():
         "disk_used": disk.used,
         "disk_total": disk.total,
         "uptime_seconds": uptime_seconds,
+        "temperature_c": _temperature_status(),
+        "processes": process_resource_status(),
     }
+    _record_resource_sample(result)
+    return result
+
+
+def _temperature_status():
+    try:
+        temps = psutil.sensors_temperatures(fahrenheit=False) or {}
+        values = []
+        for entries in temps.values():
+            for entry in entries:
+                if entry.current is not None:
+                    values.append(float(entry.current))
+        if values:
+            return round(max(values), 1)
+    except Exception:
+        pass
+    return None
+
+
+def process_resource_status():
+    groups = {
+        "Agent": {"match": ("uvicorn", "app.main:app", "freepbx-ai"), "cpu": 0.0, "rss": 0, "count": 0},
+        "Ollama": {"match": ("ollama",), "cpu": 0.0, "rss": 0, "count": 0},
+        "Piper TTS": {"match": ("piper.http_server", "piper"), "cpu": 0.0, "rss": 0, "count": 0},
+        "Caddy": {"match": ("caddy",), "cpu": 0.0, "rss": 0, "count": 0},
+    }
+
+    candidates = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            cmd = " ".join(proc.info.get("cmdline") or [])
+            name = proc.info.get("name") or ""
+            haystack = f"{name} {cmd}".lower()
+            for label, group in groups.items():
+                if any(token.lower() in haystack for token in group["match"]):
+                    candidates.append((label, proc))
+                    break
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    for label, proc in candidates:
+        try:
+            cpu = proc.cpu_percent(interval=0.03)
+            mem = proc.memory_info().rss
+            groups[label]["cpu"] += cpu
+            groups[label]["rss"] += mem
+            groups[label]["count"] += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    result = []
+    for label, group in groups.items():
+        result.append({
+            "label": label,
+            "cpu_percent": round(group["cpu"], 1),
+            "rss": int(group["rss"]),
+            "count": group["count"],
+        })
+    return result
+
+
+def _record_resource_sample(resource):
+    now = datetime.now(timezone.utc)
+    with _lock, _db() as conn:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key='last_resource_sample'"
+        ).fetchone()
+        should_write = True
+        if row and row["value"]:
+            try:
+                previous = datetime.fromisoformat(row["value"])
+                should_write = (now - previous).total_seconds() >= 30
+            except Exception:
+                should_write = True
+
+        if should_write:
+            conn.execute(
+                """
+                INSERT INTO resource_samples(created_at,cpu_percent,ram_percent,disk_percent,load_1)
+                VALUES(?,?,?,?,?)
+                """,
+                (
+                    now.isoformat(),
+                    float(resource["cpu_percent"]),
+                    float(resource["ram_percent"]),
+                    float(resource["disk_percent"]),
+                    float(resource["load_1"]),
+                ),
+            )
+            _set_meta(conn, "last_resource_sample", now.isoformat())
+            cutoff = (now.timestamp() - 7 * 86400)
+            cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+            conn.execute(
+                "DELETE FROM resource_samples WHERE created_at < ?",
+                (cutoff_iso,),
+            )
+
+
+def resource_history(hours=24):
+    hours = max(1, min(int(hours), 168))
+    cutoff = datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() - hours * 3600,
+        tz=timezone.utc,
+    ).isoformat()
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT created_at,cpu_percent,ram_percent,disk_percent,load_1
+            FROM resource_samples
+            WHERE created_at >= ?
+            ORDER BY created_at
+            """,
+            (cutoff,),
+        ).fetchall()
+
+    items = [dict(r) for r in rows]
+    if len(items) > 360:
+        step = max(1, len(items) // 360)
+        items = items[::step]
+    return items
