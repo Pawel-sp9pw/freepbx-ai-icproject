@@ -11,6 +11,7 @@ from .stt import transcribe_pcm16
 from .tts import synthesize_pcm8k
 from .llm import ask_ollama
 from .icproject import ICProjectClient
+from .monitoring import call_started, add_message, finish_call
 
 log = logging.getLogger("audiosocket")
 
@@ -63,9 +64,13 @@ class CallSession:
         self.silence_frames = 0
         self.turns = 0
         self.closed = False
+        self.final_status = "ended"
+        self.ticket_ref = ""
+        self.final_error = ""
 
     async def say(self, text):
         log.info("[%s] TTS: %s", self.call_id, text)
+        add_message(self.call_id, "assistant", text)
         pcm = await synthesize_pcm8k(
             self.settings["piper_url"],
             text,
@@ -126,6 +131,7 @@ class CallSession:
             return
 
         log.info("[%s] STT: %s", self.call_id, text)
+        add_message(self.call_id, "user", text)
         self.history.append({"role": "user", "content": text})
 
         try:
@@ -155,6 +161,8 @@ class CallSession:
                 created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
                 ticket_no = created.get("number") or created.get("shortCode") or ""
                 suffix = f" Numer zgłoszenia: {ticket_no}." if ticket_no else ""
+                self.ticket_ref = str(ticket_no or created.get("id") or "")
+                self.final_status = "completed"
                 await self.say(reply + suffix + " Dziękuję za zgłoszenie.")
                 self.closed = True
                 await asyncio.sleep(0.3)
@@ -172,6 +180,7 @@ class CallSession:
             await self.say(
                 "Nie udało się zebrać kompletu informacji. Proszę skontaktować się z serwisem."
             )
+            self.final_status = "incomplete"
             self.closed = True
             self.writer.close()
             return
@@ -193,6 +202,7 @@ async def handle_client(reader, writer):
         else:
             log.warning("First packet was not UUID; continuing.")
 
+        call_started(call_id, peer)
         await session.start()
 
         while not session.closed:
@@ -203,9 +213,17 @@ async def handle_client(reader, writer):
                 await session.handle_pcm(payload)
             elif typ == TYPE_DTMF:
                 log.info("[%s] DTMF: %r", call_id, payload)
-    except Exception:
+    except Exception as e:
+        session.final_status = "error"
+        session.final_error = str(e)
         log.exception("[%s] AudioSocket session error", call_id)
     finally:
+        finish_call(
+            call_id,
+            status=session.final_status,
+            ticket_ref=session.ticket_ref,
+            error=session.final_error,
+        )
         try:
             writer.close()
             await writer.wait_closed()
