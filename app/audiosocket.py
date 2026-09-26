@@ -308,6 +308,50 @@ class CallSession:
                     if len(pcm) >= 320 * 15:
                         await self.process_utterance(pcm)
 
+    def stt_prompt_for_state(self):
+        customer_names = ", ".join(x["name"] for x in self.customer_directory)
+        base = (self.settings.get("stt_prompt", "") or "").strip()
+
+        if self.confirmation_pending:
+            # Keep this deliberately tiny. Longer prompts can be hallucinated
+            # verbatim by Whisper on very short telephone utterances.
+            return "tak, nie"
+
+        if self.awaiting_correction and self.correction_field == "company":
+            prompt = (
+                "Nazwa firmy po polsku. "
+                "Pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja."
+            )
+            if customer_names:
+                prompt += " Nazwy klientów: " + customer_names
+            return prompt
+
+        if self.awaiting_company:
+            prompt = (
+                "Nazwa firmy po polsku. "
+                "Pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja."
+            )
+            if customer_names:
+                prompt += " Nazwy klientów: " + customer_names
+            return prompt
+
+        if self.awaiting_correction and self.correction_field == "contact":
+            return "Numer telefonu. Cyfry od zera do dziewięciu."
+
+        if self.awaiting_contact:
+            return "Numer telefonu. Cyfry od zera do dziewięciu."
+
+        if self.awaiting_correction and self.correction_field == "description":
+            return (base + " Opis problemu serwisowego po polsku.").strip()
+
+        if self.awaiting_problem:
+            return (base + " Opis problemu serwisowego po polsku.").strip()
+
+        prompt = base
+        if customer_names:
+            prompt = (prompt + " Nazwy klientów: " + customer_names).strip()
+        return prompt
+
     async def process_utterance(self, pcm: bytes):
         self.turns += 1
         try:
@@ -318,15 +362,7 @@ class CallSession:
                 self.settings["whisper_device"],
                 self.settings["whisper_compute_type"],
                 8000,
-                (
-                    "Krótka odpowiedź na pytanie o potwierdzenie. "
-                    "Oczekiwane odpowiedzi: tak, nie, zgadza się, nie zgadza się, potwierdzam."
-                    if self.confirmation_pending
-                    else (
-                        self.settings.get("stt_prompt", "")
-                        + (" Klienci: " + ", ".join(x["name"] for x in self.customer_directory) if self.customer_directory else "")
-                    )
-                ),
+                self.stt_prompt_for_state(),
             )
         except Exception:
             log.exception("[%s] STT error", self.call_id)
