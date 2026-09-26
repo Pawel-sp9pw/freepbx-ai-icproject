@@ -279,6 +279,15 @@ class CallSession:
                            + json.dumps(state_context, ensure_ascii=False),
             })
 
+        if self.awaiting_correction:
+            llm_history.append({
+                "role": "system",
+                "content": (
+                    "Użytkownik właśnie poprawia wcześniejsze dane. "
+                    "Nowe wartości podane w tej wypowiedzi mają nadpisać odpowiednie stare pola."
+                ),
+            })
+
         try:
             result = await ask_ollama(
                 self.settings["ollama_url"],
@@ -299,6 +308,9 @@ class CallSession:
         for key, value in ticket_update.items():
             if value not in (None, "", [], {}):
                 self.ticket_data[key] = value
+
+        if self.awaiting_correction:
+            self.awaiting_correction = False
 
         # Normalize contact phone numbers recognized with spaces, commas or dashes.
         contact_value = str(self.ticket_data.get("contact", "") or "")
@@ -338,12 +350,15 @@ class CallSession:
         result["ticket"] = dict(self.ticket_data)
 
         company_ok = bool(str(self.ticket_data.get("company", "")).strip())
+        contact_ok = bool(str(self.ticket_data.get("contact", "")).strip())
         description_ok = bool(str(self.ticket_data.get("description", "")).strip())
-        if company_ok and description_ok:
+        if company_ok and contact_ok and description_ok:
             result["done"] = True
             # Once the ticket is complete, do not trust a small LLM to produce
             # a clean final utterance; use a deterministic customer-facing line.
             reply = "Dziękuję, mam potrzebne informacje."
+        else:
+            result["done"] = False
 
         self.history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
 
