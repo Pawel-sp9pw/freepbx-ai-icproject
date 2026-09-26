@@ -90,12 +90,9 @@ class ICProjectClient:
                         if not isinstance(b, dict):
                             continue
                         # Defensive filtering in case the API ignores project filter.
-                        bid_project = (
-                            b.get("projectId")
-                            or (b.get("project") or {}).get("id")
-                            if isinstance(b.get("project"), dict)
-                            else None
-                        )
+                        bid_project = b.get("projectId")
+                        if not bid_project and isinstance(b.get("project"), dict):
+                            bid_project = (b.get("project") or {}).get("id")
                         if bid_project and bid_project != project_id:
                             continue
 
