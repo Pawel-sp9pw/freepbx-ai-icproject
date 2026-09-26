@@ -14,6 +14,7 @@ from .tts import synthesize_pcm8k
 from .llm import ask_ollama
 from .icproject import ICProjectClient
 from .monitoring import call_started, add_message, finish_call
+from .call_registry import consume_caller
 
 log = logging.getLogger("audiosocket")
 
@@ -136,7 +137,22 @@ class CallSession:
         await send_pcm(self.writer, pcm)
 
     async def start(self):
-        await self.say(self.settings["greeting"])
+        company = str(self.ticket_data.get("company", "") or "").strip()
+        contact = str(self.ticket_data.get("contact", "") or "").strip()
+
+        if company and contact:
+            await self.say(
+                f"Dzień dobry. Tu automatyczny asystent PECEMED. "
+                f"Rozpoznaję numer jako {company}. Proszę opisać problem."
+            )
+        elif contact:
+            await self.say(
+                "Dzień dobry. Tu automatyczny asystent PECEMED. "
+                "Numer kontaktowy został rozpoznany automatycznie. "
+                "Proszę podać nazwę firmy oraz opisać problem."
+            )
+        else:
+            await self.say(self.settings["greeting"])
 
     async def handle_pcm(self, payload: bytes):
         self.frame_buf.extend(payload)
@@ -403,6 +419,27 @@ async def handle_client(reader, writer):
             log.info("Call UUID: %s", call_id)
         else:
             log.warning("First packet was not UUID; continuing.")
+
+        registered_caller = consume_caller(call_id)
+        if registered_caller:
+            caller_digits = re.sub(r"\D", "", registered_caller)
+            if caller_digits:
+                session.ticket_data["contact"] = caller_digits
+                matched_customer, match_score = match_customer(
+                    "",
+                    caller_digits,
+                    session.customer_directory,
+                )
+                if matched_customer:
+                    session.ticket_data["company"] = matched_customer["name"]
+                    if matched_customer.get("phone"):
+                        session.ticket_data["contact"] = matched_customer["phone"]
+                log.info(
+                    "[%s] CallerID registered: %s%s",
+                    call_id,
+                    session.ticket_data.get("contact", caller_digits),
+                    f" -> {session.ticket_data.get('company')}" if session.ticket_data.get("company") else "",
+                )
 
         call_started(call_id, peer)
         await session.start()
