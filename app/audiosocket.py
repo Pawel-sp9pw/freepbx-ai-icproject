@@ -89,6 +89,17 @@ def speak_phone(value: str):
     return " ".join(digits) if digits else value
 
 
+def extract_phone_digits(value: str):
+    digits = re.sub(r"\D", "", value or "")
+    return digits if 9 <= len(digits) <= 15 else ""
+
+
+def company_without_phone(value: str):
+    cleaned = re.sub(r"[\d\s,.;:+()\-]{7,}", " ", value or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:-")
+    return cleaned.strip()
+
+
 def match_customer(company: str, contact: str, directory: list):
     contact_digits = re.sub(r"\D", "", contact or "")
     # Phone match is strongest and can repair a badly recognized company name.
@@ -134,6 +145,8 @@ class CallSession:
         self.customer_directory = parse_customer_directory(self.settings.get("customer_directory", ""))
         self.confirmation_pending = False
         self.awaiting_correction = False
+        self.awaiting_company = False
+        self.awaiting_contact = False
         self.awaiting_problem = False
         self.stt_misses = 0
         self.listen_not_before = 0.0
@@ -174,15 +187,24 @@ class CallSession:
                 f"Rozpoznaję numer jako {company}. Proszę opisać problem."
             )
         elif contact:
-            self.awaiting_problem = False
+            self.awaiting_company = True
             await self.say(
                 "Dzień dobry. Tu automatyczny asystent PECEMED. "
                 "Numer kontaktowy został rozpoznany automatycznie. "
-                "Proszę podać nazwę firmy oraz opisać problem."
+                "Proszę podać nazwę firmy."
+            )
+        elif company:
+            self.awaiting_contact = True
+            await self.say(
+                f"Dzień dobry. Tu automatyczny asystent PECEMED. "
+                f"Firma: {company}. Proszę podać numer telefonu kontaktowego."
             )
         else:
-            self.awaiting_problem = False
-            await self.say(self.settings["greeting"])
+            self.awaiting_company = True
+            await self.say(
+                "Dzień dobry. Tu automatyczny asystent PECEMED. "
+                "Proszę podać nazwę firmy."
+            )
 
     async def handle_pcm(self, payload: bytes):
         if time.monotonic() < self.listen_not_before:
@@ -310,6 +332,9 @@ class CallSession:
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 self.awaiting_correction = True
+                self.awaiting_company = False
+                self.awaiting_contact = False
+                self.awaiting_problem = False
                 await self.say(
                     "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
                     "nazwę firmy, numer kontaktowy albo opis problemu."
@@ -320,6 +345,63 @@ class CallSession:
             if self.confirmation_misses >= 2:
                 self.confirmation_misses = 0
                 await self.say("Nie udało mi się rozpoznać odpowiedzi. Proszę powiedzieć tylko: tak albo nie.")
+            return
+
+        # Fast deterministic state machine for normal calls.
+        # Ollama is only a fallback for corrections / unusual utterances.
+        if self.awaiting_company:
+            phone = extract_phone_digits(text)
+            company_text = company_without_phone(text) or text.strip()
+
+            matched_customer, match_score = match_customer(
+                company_text,
+                phone,
+                self.customer_directory,
+            )
+            if matched_customer:
+                self.ticket_data["company"] = matched_customer["name"]
+                if matched_customer.get("phone"):
+                    self.ticket_data["contact"] = matched_customer["phone"]
+            else:
+                self.ticket_data["company"] = company_text
+
+            if phone and not self.ticket_data.get("contact"):
+                self.ticket_data["contact"] = phone
+
+            self.awaiting_company = False
+
+            if self.ticket_data.get("contact"):
+                self.awaiting_problem = True
+                await self.say("Dziękuję. Proszę opisać problem.")
+            else:
+                self.awaiting_contact = True
+                await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+            return
+
+        if self.awaiting_contact:
+            phone = extract_phone_digits(text)
+            if not phone:
+                await self.say(
+                    "Nie udało mi się rozpoznać numeru. "
+                    "Proszę podać numer telefonu cyfra po cyfrze."
+                )
+                return
+
+            self.ticket_data["contact"] = phone
+
+            matched_customer, match_score = match_customer(
+                str(self.ticket_data.get("company", "") or ""),
+                phone,
+                self.customer_directory,
+            )
+            if matched_customer:
+                self.ticket_data["company"] = matched_customer["name"]
+                if matched_customer.get("phone"):
+                    self.ticket_data["contact"] = matched_customer["phone"]
+
+            self.awaiting_contact = False
+            self.awaiting_problem = True
+            await self.say("Dziękuję. Proszę opisać problem.")
             return
 
         # Explicit conversation state beats LLM inference. If we just asked
@@ -342,6 +424,9 @@ class CallSession:
                 self.confirmation_pending = True
                 self.confirmation_misses = 0
                 self.awaiting_correction = False
+                self.awaiting_company = False
+                self.awaiting_contact = False
+                self.awaiting_problem = False
 
                 await self.say(
                     "Podsumuję zgłoszenie. "
