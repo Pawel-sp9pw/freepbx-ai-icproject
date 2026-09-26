@@ -101,6 +101,24 @@ def matches_confirmation_phrase(text: str, phrases: tuple[str, ...]):
     return normalized in phrases
 
 
+def apply_llm_fill_only(ticket_data: dict, ticket_update: dict):
+    """Apply only missing user-facing ticket fields from LLM output.
+
+    Existing values are immutable here. Explicit correction flow is the only
+    place allowed to replace them.
+    """
+    allowed_fill_keys = {"company", "contact", "title", "description"}
+    for key, value in (ticket_update or {}).items():
+        if key not in allowed_fill_keys:
+            continue
+        if value in (None, "", [], {}):
+            continue
+        if ticket_data.get(key):
+            continue
+        ticket_data[key] = value
+    return ticket_data
+
+
 def company_without_phone(value: str):
     cleaned = re.sub(r"[\d\s,.;:+()\-]{7,}", " ", value or "")
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:-")
@@ -774,17 +792,8 @@ class CallSession:
         ticket_update = result.get("ticket") or {}
 
         # General LLM fallback is fill-only. It may add a missing field but it
-        # may NEVER overwrite data already collected for this call. Replacements
-        # are allowed only in the explicit correction state above.
-        allowed_fill_keys = {"company", "contact", "title", "description"}
-        for key, value in ticket_update.items():
-            if key not in allowed_fill_keys:
-                continue
-            if value in (None, "", [], {}):
-                continue
-            if self.ticket_data.get(key):
-                continue
-            self.ticket_data[key] = value
+        # may NEVER overwrite data already collected for this call.
+        apply_llm_fill_only(self.ticket_data, ticket_update)
 
         # Normalize contact phone numbers recognized with spaces, commas or dashes.
         contact_value = str(self.ticket_data.get("contact", "") or "")
