@@ -86,13 +86,9 @@
       </p>
       <p>
         Status:
-        {% if wg.ok and wg.active %}
-          <span class="ok">aktywny</span>
-        {% elif wg.ok %}
-          <span class="err">nieaktywny</span>
-        {% else %}
-          <span class="err">błąd</span>
-        {% endif %}
+        <span id="wgStatus" class="{% if wg.ok and wg.active %}ok{% else %}err{% endif %}">
+          {% if wg.ok and wg.active %}aktywny{% elif wg.ok %}nieaktywny{% else %}błąd{% endif %}
+        </span>
       </p>
       <label>Nowa konfiguracja wg0.conf
         <textarea id="wgConfig" placeholder="[Interface]
@@ -109,7 +105,7 @@ PersistentKeepalive = 25"></textarea>
         <input id="wgEnable" type="checkbox" checked style="width:auto"> uruchom i włącz przy starcie
       </label>
       <button type="button" class="test" onclick="applyWireGuard()">Zapisz i uruchom WireGuard</button>
-      <button type="button" class="test" onclick="testApi('/api/wireguard/status','wgResult','GET')">Odśwież status</button>
+      <button type="button" class="test" onclick="refreshWireGuardStatus()">Odśwież status</button>
       <span id="wgResult"></span>
     </div>
 
@@ -144,6 +140,36 @@ PersistentKeepalive = 25"></textarea>
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
 
+  async function refreshWireGuardStatus(){
+    const result=document.getElementById('wgResult');
+    const status=document.getElementById('wgStatus');
+    result.textContent=' sprawdzam...';
+    result.className='';
+    try{
+      const r=await fetch('/api/wireguard/status',{method:'GET',cache:'no-store'});
+      const j=await r.json();
+
+      if(j.ok && j.active){
+        status.textContent='aktywny';
+        status.className='ok';
+      }else if(j.ok){
+        status.textContent='nieaktywny';
+        status.className='err';
+      }else{
+        status.textContent='błąd';
+        status.className='err';
+      }
+
+      result.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.output?' — '+j.output:'');
+      result.className=j.ok?'ok':'err';
+    }catch(e){
+      status.textContent='błąd';
+      status.className='err';
+      result.textContent=' BŁĄD — '+e;
+      result.className='err';
+    }
+  }
+
   async function applyWireGuard(){
     const el=document.getElementById('wgResult');
     const fd=new FormData();
@@ -155,7 +181,10 @@ PersistentKeepalive = 25"></textarea>
       const j=await r.json();
       el.textContent=' '+(j.ok?'OK':'BŁĄD')+(j.active?' — tunel aktywny':'')+(j.output?' — '+j.output:'');
       el.className=j.ok?'ok':'err';
-      if(j.ok) document.getElementById('wgConfig').value='';
+      if(j.ok){
+        document.getElementById('wgConfig').value='';
+        await refreshWireGuardStatus();
+      }
     }catch(e){el.textContent=' BŁĄD — '+e;el.className='err'}
   }
 
