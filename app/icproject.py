@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone, timedelta
 import httpx
 
 
@@ -118,11 +119,14 @@ class ICProjectClient:
         if extra:
             description = description + "\n\n" + "\n".join(extra)
 
+        now = datetime.now(timezone.utc)
         payload = {
             "identifier": str(uuid.uuid4()),
             "boardColumn": self.board_column,
             "name": name,
             "description": description[:12000],
+            "dateStart": now.isoformat(),
+            "dateEnd": (now + timedelta(days=1)).isoformat(),
             "priority": ticket.get("priority") or default_priority,
         }
 
