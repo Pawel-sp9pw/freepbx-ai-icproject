@@ -1,6 +1,7 @@
 import sqlite3
 import subprocess
 import threading
+import psutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -205,3 +206,32 @@ def service_status():
                 "error": str(e),
             })
     return result
+
+
+def linux_resource_status():
+    vm = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    swap = psutil.swap_memory()
+    boot = datetime.fromtimestamp(psutil.boot_time(), tz=timezone.utc)
+    uptime_seconds = max(0, int((datetime.now(timezone.utc) - boot).total_seconds()))
+    load1, load5, load15 = psutil.getloadavg()
+    cpu_count = psutil.cpu_count(logical=True) or 1
+
+    return {
+        "cpu_percent": round(psutil.cpu_percent(interval=0.15), 1),
+        "cpu_count": cpu_count,
+        "load_1": round(load1, 2),
+        "load_5": round(load5, 2),
+        "load_15": round(load15, 2),
+        "load_1_percent": round(min(100.0, (load1 / cpu_count) * 100.0), 1),
+        "ram_percent": round(vm.percent, 1),
+        "ram_used": vm.used,
+        "ram_total": vm.total,
+        "swap_percent": round(swap.percent, 1),
+        "swap_used": swap.used,
+        "swap_total": swap.total,
+        "disk_percent": round(disk.percent, 1),
+        "disk_used": disk.used,
+        "disk_total": disk.total,
+        "uptime_seconds": uptime_seconds,
+    }
