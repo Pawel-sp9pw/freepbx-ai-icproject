@@ -53,3 +53,48 @@ async def ask_ollama(url: str, model: str, system_prompt: str, history: list[dic
     obj.setdefault("done", False)
     obj.setdefault("ticket", {})
     return obj
+
+
+async def interpret_turn(url: str, model: str, expected: str, text: str, ticket: dict):
+    system = """Jesteś klasyfikatorem jednej wypowiedzi klienta helpdesku.
+Zwróć wyłącznie JSON:
+{
+  "intent": "company|contact|problem|confirm_yes|confirm_no|correction|unknown",
+  "company": "",
+  "contact": "",
+  "description": ""
+}
+Nie wymyślaj danych. Wyciągaj tylko to, co rzeczywiście padło.
+Jeśli klient potwierdza dane, intent=confirm_yes.
+Jeśli zaprzecza lub chce coś poprawić, intent=confirm_no albo correction.
+"""
+    user = (
+        f"Oczekiwany krok: {expected}\n"
+        f"Już zebrane dane: {json.dumps(ticket, ensure_ascii=False)}\n"
+        f"Wypowiedź klienta: {text}"
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        "format": "json",
+        "think": False,
+        "keep_alive": "30m",
+        "options": {
+            "temperature": 0.0,
+            "num_predict": 96,
+        },
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(f"{url.rstrip('/')}/api/chat", json=payload)
+        r.raise_for_status()
+        content = r.json()["message"]["content"]
+    obj = json.loads(content)
+    obj.setdefault("intent", "unknown")
+    obj.setdefault("company", "")
+    obj.setdefault("contact", "")
+    obj.setdefault("description", "")
+    return obj
