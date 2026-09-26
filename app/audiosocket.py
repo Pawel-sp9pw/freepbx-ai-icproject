@@ -41,8 +41,14 @@ async def read_packet(reader):
     return typ, payload
 
 async def send_packet(writer, typ, payload=b""):
-    writer.write(bytes([typ]) + len(payload).to_bytes(2, "big") + payload)
-    await writer.drain()
+    if writer.is_closing():
+        return False
+    try:
+        writer.write(bytes([typ]) + len(payload).to_bytes(2, "big") + payload)
+        await writer.drain()
+        return True
+    except (ConnectionResetError, BrokenPipeError, RuntimeError):
+        return False
 
 async def send_pcm(writer, pcm: bytes):
     # 20 ms @ 8 kHz, mono, 16-bit = 320 bytes
@@ -50,7 +56,9 @@ async def send_pcm(writer, pcm: bytes):
         chunk = pcm[i:i+320]
         if len(chunk) < 320:
             chunk += b"\x00" * (320 - len(chunk))
-        await send_packet(writer, TYPE_PCM_8K, chunk)
+        ok = await send_packet(writer, TYPE_PCM_8K, chunk)
+        if not ok:
+            break
         await asyncio.sleep(0.02)
 
 
@@ -452,6 +460,15 @@ async def handle_client(reader, writer):
                 await session.handle_pcm(payload)
             elif typ == TYPE_DTMF:
                 log.info("[%s] DTMF: %r", call_id, payload)
+    except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
+        log.info("[%s] AudioSocket peer closed connection", call_id)
+    except RuntimeError as e:
+        if "closed" in str(e).lower():
+            log.info("[%s] AudioSocket transport already closed: %s", call_id, e)
+        else:
+            session.final_status = "error"
+            session.final_error = str(e)
+            log.exception("[%s] AudioSocket session error", call_id)
     except Exception as e:
         session.final_status = "error"
         session.final_error = str(e)
