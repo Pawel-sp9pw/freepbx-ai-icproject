@@ -28,7 +28,23 @@ class DummyWriter:
 class ConversationHarness:
     def __init__(self):
         self.writer = DummyWriter()
-        self.session = audiosocket.CallSession("test-call", self.writer)
+        test_settings = {
+            "customer_directory": "",
+            "whisper_model": "small",
+            "whisper_device": "cpu",
+            "whisper_compute_type": "int8",
+            "ollama_url": "http://127.0.0.1:11434",
+            "ollama_model": "qwen3:1.7b",
+            "system_prompt": "",
+            "stt_prompt": "",
+            "max_turns": 12,
+            "silence_ms": 900,
+            "piper_url": "http://127.0.0.1:5000",
+            "piper_voice": "",
+            "icp_priority": "normal",
+        }
+        with patch.object(audiosocket, "load_settings", return_value=test_settings):
+            self.session = audiosocket.CallSession("test-call", self.writer)
         self.spoken = []
         self.saved = []
 
