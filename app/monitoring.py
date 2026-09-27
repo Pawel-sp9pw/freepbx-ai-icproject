@@ -1,3 +1,5 @@
+import json
+import math
 import sqlite3
 import subprocess
 import threading
@@ -132,6 +134,32 @@ def finish_call(call_id: str, status="ended", ticket_ref="", error=""):
         )
 
 
+def _stt_accuracy_summary(raw_debug_rows):
+    """Return a compact per-call STT confidence estimate.
+
+    faster-whisper exposes avg_logprob, not a calibrated probability of a
+    transcript being correct. exp(avg_logprob) is still useful as a stable,
+    intuitive 0-100 confidence indicator for comparing calls in the panel.
+    """
+    values = []
+    for row in raw_debug_rows:
+        try:
+            payload = json.loads(row["content"])
+            score = payload.get("selected_score")
+            selected = str(payload.get("selected", "") or "").strip()
+            if not selected or score is None:
+                continue
+            score = float(score)
+            confidence = max(0.0, min(100.0, math.exp(score) * 100.0))
+            values.append(confidence)
+        except Exception:
+            continue
+
+    if not values:
+        return None, 0
+    return round(sum(values) / len(values)), len(values)
+
+
 def list_calls(limit=30):
     limit = max(1, min(int(limit), 200))
     with _db() as conn:
@@ -147,7 +175,31 @@ def list_calls(limit=30):
             """,
             (limit,),
         ).fetchall()
-    return [dict(r) for r in rows]
+
+        items = [dict(r) for r in rows]
+        call_ids = [item["call_id"] for item in items]
+        debug_by_call = {call_id: [] for call_id in call_ids}
+
+        if call_ids:
+            placeholders = ",".join("?" for _ in call_ids)
+            debug_rows = conn.execute(
+                f"""
+                SELECT call_id,content
+                FROM messages
+                WHERE role='stt_debug' AND call_id IN ({placeholders})
+                ORDER BY id
+                """,
+                call_ids,
+            ).fetchall()
+            for row in debug_rows:
+                debug_by_call.setdefault(row["call_id"], []).append(row)
+
+    for item in items:
+        accuracy, samples = _stt_accuracy_summary(debug_by_call.get(item["call_id"], []))
+        item["stt_accuracy_percent"] = accuracy
+        item["stt_accuracy_samples"] = samples
+
+    return items
 
 
 def get_call(call_id: str):
