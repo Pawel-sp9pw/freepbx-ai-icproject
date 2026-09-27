@@ -420,6 +420,22 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.saved, [])
         self.assertTrue(any("kończę rozmowę" in x.lower() for x in h.spoken))
 
+    async def test_misrecognized_abusive_dismissal_also_ends_call(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("A weź spierdolaj.")
+
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
+        self.assertNotIn("description", h.session.ticket_data)
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertEqual(h.saved, [])
+
     async def test_profanity_with_real_problem_is_still_accepted(self):
         h = ConversationHarness()
         h.session.ticket_data = {
