@@ -4,6 +4,8 @@ from pathlib import Path
 import tempfile
 import wave
 
+import numpy as np
+from scipy.signal import butter, resample_poly, sosfiltfilt
 from faster_whisper import WhisperModel
 
 log = logging.getLogger("stt")
@@ -59,7 +61,10 @@ def _segment_confidence(segments):
         if score is None:
             continue
         try:
-            duration = max(0.1, float(getattr(s, "end", 0.0)) - float(getattr(s, "start", 0.0)))
+            duration = max(
+                0.1,
+                float(getattr(s, "end", 0.0)) - float(getattr(s, "start", 0.0)),
+            )
             weighted_sum += float(score) * duration
             total_weight += duration
         except Exception:
@@ -67,23 +72,78 @@ def _segment_confidence(segments):
     return (weighted_sum / total_weight) if total_weight else None
 
 
+def _prepare_phone_audio(pcm: bytes, sample_rate: int):
+    """Prepare narrow-band telephone audio for Whisper.
+
+    The application receives 8 kHz signed 16-bit PCM. We remove DC/very-low
+    frequency rumble, gently normalize level and explicitly upsample to 16 kHz.
+    Whisper would resample internally, but doing it here gives us predictable
+    input and improves very quiet calls.
+    """
+    if not pcm:
+        return pcm, sample_rate
+
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    if samples.size < 32:
+        return pcm, sample_rate
+
+    # Remove DC offset first.
+    samples -= float(np.mean(samples))
+
+    # Telephone speech contains little useful information below ~90 Hz.
+    # Keep the filter conservative so we do not damage consonants.
+    try:
+        nyquist = sample_rate / 2.0
+        cutoff = min(90.0, nyquist * 0.1)
+        if cutoff > 0 and samples.size > 128:
+            sos = butter(2, cutoff / nyquist, btype="highpass", output="sos")
+            samples = sosfiltfilt(sos, samples).astype(np.float32)
+    except Exception:
+        pass
+
+    # Normalize quiet speech, but avoid amplifying near-silence/noise too much.
+    rms = float(np.sqrt(np.mean(samples * samples) + 1e-12))
+    peak = float(np.max(np.abs(samples)) + 1e-12)
+    if rms >= 0.003:
+        target_rms = 0.10
+        gain = min(4.0, max(0.65, target_rms / rms))
+        samples *= gain
+
+    peak = float(np.max(np.abs(samples)) + 1e-12)
+    if peak > 0.96:
+        samples *= 0.96 / peak
+
+    target_rate = 16000
+    if sample_rate != target_rate:
+        samples = resample_poly(samples, target_rate, sample_rate).astype(np.float32)
+        sample_rate = target_rate
+
+    samples = np.clip(samples, -0.98, 0.98)
+    out = (samples * 32767.0).astype("<i2").tobytes()
+    return out, sample_rate
+
+
 def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
-    if mode != "company":
-        return False
-
     clean = " ".join((text or "").split()).strip()
-    if not clean:
-        return True
-
     words = clean.split()
-    if len(words) > 3:
-        return False
 
-    # Short company names are the hardest case on 8 kHz telephony. Run a
-    # precision pass for them even when Whisper is moderately confident.
-    if avg_logprob is None:
-        return True
-    return avg_logprob < -0.20 or len(words) <= 2
+    if mode == "company":
+        if not clean:
+            return True
+        if len(words) <= 3:
+            return True
+        return avg_logprob is not None and avg_logprob < -0.55
+
+    if mode == "problem":
+        if not clean:
+            return True
+        # Retry longer descriptions only when confidence is genuinely weak.
+        return avg_logprob is not None and avg_logprob < -0.62
+
+    if mode == "contact":
+        return not clean or (avg_logprob is not None and avg_logprob < -0.70)
+
+    return False
 
 
 def _choose_candidate(first_text, first_score, second_text, second_score):
@@ -97,9 +157,8 @@ def _choose_candidate(first_text, first_score, second_text, second_score):
     if first_text.lower() == second_text.lower():
         return first_text
 
-    # Prefer the precision pass only when it is measurably more confident.
     if second_score is not None and first_score is not None:
-        if second_score >= first_score + 0.04:
+        if second_score >= first_score + 0.03:
             return second_text
         return first_text
 
@@ -114,22 +173,25 @@ def _transcribe_once(
     initial_prompt,
     beam_size,
     use_vad=True,
+    patience=1.0,
 ):
     kwargs = {
         "language": "pl",
         "vad_filter": bool(use_vad),
         "beam_size": int(beam_size),
+        "patience": float(patience),
         "temperature": 0.0,
         "condition_on_previous_text": False,
-        "no_speech_threshold": 0.6,
-        "log_prob_threshold": -1.0,
+        "no_speech_threshold": 0.55,
+        "log_prob_threshold": -1.2,
         "compression_ratio_threshold": 2.4,
         "initial_prompt": initial_prompt or None,
+        "suppress_blank": True,
     }
     if use_vad:
         kwargs["vad_parameters"] = {
-            "min_silence_duration_ms": 500,
-            "speech_pad_ms": 200,
+            "min_silence_duration_ms": 350,
+            "speech_pad_ms": 300,
         }
 
     segments, _info = model.transcribe(str(path), **kwargs)
@@ -147,6 +209,8 @@ def transcribe_pcm16(
     initial_prompt="",
     mode="normal",
 ):
+    prepared_pcm, prepared_rate = _prepare_phone_audio(pcm, sample_rate)
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         path = Path(f.name)
 
@@ -154,8 +218,8 @@ def transcribe_pcm16(
         with wave.open(str(path), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
-            w.setframerate(sample_rate)
-            w.writeframes(pcm)
+            w.setframerate(prepared_rate)
+            w.writeframes(prepared_pcm)
 
         model = get_model(model_name, device, compute_type)
         audio_seconds = len(pcm) / 2 / float(sample_rate)
@@ -164,8 +228,9 @@ def transcribe_pcm16(
             model,
             path,
             initial_prompt,
-            beam_size=3,
+            beam_size=5,
             use_vad=True,
+            patience=1.15,
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
         if first_bad:
@@ -179,20 +244,25 @@ def transcribe_pcm16(
                 )
             first_text = ""
 
-        # Confirmation is deliberately single-pass: we never want a precision
-        # retry to turn an unclear utterance into an artificial "tak".
+        # Confirmation remains deliberately conservative. Never use a second
+        # decoding pass to manufacture a clearer "tak" from ambiguous audio.
         if mode == "confirmation":
             return first_text
 
         if _needs_adaptive_retry(first_text, first_score, mode):
+            # For company/contact keep the domain hint. For a weak problem
+            # description, remove the prompt in pass 2 to reduce prompt bias.
+            retry_prompt = initial_prompt
+            if mode == "problem":
+                retry_prompt = ""
+
             second_text, second_score = _transcribe_once(
                 model,
                 path,
-                initial_prompt,
-                beam_size=5,
-                # Audio has already been segmented by the application VAD.
-                # Disabling Whisper VAD here helps avoid clipping short names.
+                retry_prompt,
+                beam_size=8,
                 use_vad=False,
+                patience=1.35,
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
             if second_bad:
@@ -214,7 +284,8 @@ def transcribe_pcm16(
             )
             if second_text and second_text != first_text:
                 log.info(
-                    "Adaptive STT company: pass1=%r (%s), pass2=%r (%s), selected=%r",
+                    "Adaptive STT %s: pass1=%r (%s), pass2=%r (%s), selected=%r",
+                    mode,
                     first_text,
                     f"{first_score:.3f}" if first_score is not None else "n/a",
                     second_text,
