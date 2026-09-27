@@ -89,13 +89,16 @@ def speak_phone(value: str):
     return " ".join(digits) if digits else value
 
 
-def extract_phone_digits(value: str):
-    """Accept Polish contact numbers only in unambiguous forms.
-
-    Valid: 9 digits, +48/48 + 9 digits, or 0048 + 9 digits.
-    Return the normalized 9-digit national number.
-    """
+def extract_phone_digits(value: str, mode: str = "pl"):
+    """Normalize a spoken contact number according to configured validation."""
     digits = re.sub(r"\D", "", value or "")
+    mode = str(mode or "pl").lower()
+
+    if mode == "international":
+        return digits if 7 <= len(digits) <= 15 else ""
+
+    # Polish mode: accept only an unambiguous 9-digit national number,
+    # optionally prefixed with 48 or 0048.
     if len(digits) == 9:
         return digits
     if len(digits) == 11 and digits.startswith("48"):
@@ -266,6 +269,9 @@ class CallSession:
         self.awaiting_company = False
         self.awaiting_contact = False
         self.awaiting_problem = False
+        self.company_confirmation_pending = False
+        self.company_candidate = ""
+        self.company_candidate_score = None
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -460,7 +466,7 @@ class CallSession:
                         await self.process_utterance(pcm)
 
     def stt_mode_for_state(self):
-        if self.confirmation_pending:
+        if self.confirmation_pending or self.company_confirmation_pending:
             return "confirmation"
         if self.awaiting_correction and self.correction_field == "company":
             return "company"
@@ -480,7 +486,7 @@ class CallSession:
         customer_names = ", ".join(x["name"] for x in self.customer_directory)
         base = (self.settings.get("stt_prompt", "") or "").strip()
 
-        if self.confirmation_pending:
+        if self.confirmation_pending or self.company_confirmation_pending:
             # Keep this deliberately tiny. Longer prompts can be hallucinated
             # verbatim by Whisper on very short telephone utterances.
             return "tak, nie"
@@ -498,10 +504,12 @@ class CallSession:
             return "Numer telefonu. Cyfry od zera do dziewięciu."
 
         if self.awaiting_correction and self.correction_field == "description":
-            return (base + " Opis problemu serwisowego po polsku.").strip()
+            hint = (self.settings.get("stt_problem_hint", "") or "").strip()
+            return (base + " Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
 
         if self.awaiting_problem:
-            return (base + " Opis problemu serwisowego po polsku.").strip()
+            hint = (self.settings.get("stt_problem_hint", "") or "").strip()
+            return (base + " Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
 
         prompt = base
         if customer_names:
@@ -511,7 +519,7 @@ class CallSession:
     async def process_utterance(self, pcm: bytes):
         self.turns += 1
         try:
-            text = await asyncio.to_thread(
+            stt_result = await asyncio.to_thread(
                 transcribe_pcm16,
                 pcm,
                 self.settings["whisper_model"],
@@ -520,7 +528,20 @@ class CallSession:
                 8000,
                 self.stt_prompt_for_state(),
                 self.stt_mode_for_state(),
+                True,
             )
+            if isinstance(stt_result, dict):
+                text = str(stt_result.get("selected", "") or "")
+                selected_score = stt_result.get("selected_score")
+                add_message(
+                    self.call_id,
+                    "stt_debug",
+                    json.dumps(stt_result, ensure_ascii=False),
+                )
+            else:
+                # Backward-compatible fallback for patched tests / older tools.
+                text = str(stt_result or "")
+                selected_score = None
         except Exception:
             log.exception("[%s] STT error", self.call_id)
             await self.say("Nie udało mi się rozpoznać wypowiedzi. Proszę powtórzyć.")
@@ -551,6 +572,45 @@ class CallSession:
         if looks_like_prompt_injection(text):
             log.warning("[%s] Blocked prompt-injection-like utterance: %s", self.call_id, text[:300])
             await self.refuse_out_of_scope()
+            return
+
+        if self.company_confirmation_pending:
+            yes_phrases = (
+                "tak", "tak zgadza się", "tak zgadza sie", "zgadza się", "zgadza sie",
+                "potwierdzam", "dobrze", "tak dobrze",
+            )
+            no_phrases = (
+                "nie", "nie zgadza się", "nie zgadza sie", "źle", "zle",
+                "niepoprawne", "popraw", "zmień", "zmien",
+            )
+
+            if matches_confirmation_phrase(normalized, yes_phrases):
+                self.ticket_data["company"] = self.company_candidate
+                self.company_confirmation_pending = False
+                self.company_candidate = ""
+                self.company_candidate_score = None
+                self.awaiting_company = False
+
+                if self.ticket_data.get("contact"):
+                    self.awaiting_problem = True
+                    await self.say("Dziękuję. Proszę opisać problem.")
+                else:
+                    self.awaiting_contact = True
+                    await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                return
+
+            if matches_confirmation_phrase(normalized, no_phrases):
+                self.company_confirmation_pending = False
+                self.company_candidate = ""
+                self.company_candidate_score = None
+                self.awaiting_company = True
+                await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
+                return
+
+            await self.say(
+                "Nie rozpoznałem jednoznacznej odpowiedzi. "
+                "Proszę powiedzieć tylko tak albo nie."
+            )
             return
 
         goodbye_phrases = (
@@ -697,13 +757,13 @@ class CallSession:
                 self.ticket_data["company"] = matched_customer["name"] if matched_customer else company_text
 
             elif self.correction_field == "contact":
-                phone = extract_phone_digits(text)
+                phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
                 if not phone:
                     interpreted = await self.interpret_fallback("nowy numer telefonu kontaktowego", text)
                     if interpreted.get("blocked"):
                         await self.refuse_out_of_scope()
                         return
-                    phone = extract_phone_digits(str(interpreted.get("contact", "") or ""))
+                    phone = extract_phone_digits(str(interpreted.get("contact", "") or ""), self.settings.get("phone_validation_mode", "pl"))
                 if not phone:
                     await self.say("Nie udało mi się rozpoznać numeru. Proszę podać go cyfra po cyfrze.")
                     return
@@ -746,7 +806,7 @@ class CallSession:
         # Fast deterministic state machine for normal calls.
         # Ollama is only a fallback for corrections / unusual utterances.
         if self.awaiting_company:
-            phone = extract_phone_digits(text)
+            phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             company_text = company_without_phone(text) or text.strip()
 
             if looks_like_invalid_company_name(company_text):
@@ -782,6 +842,18 @@ class CallSession:
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
             else:
+                confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
+                low_confidence = (
+                    selected_score is not None
+                    and float(selected_score) < confirm_threshold
+                )
+                if low_confidence:
+                    self.company_confirmation_pending = True
+                    self.company_candidate = company_text
+                    self.company_candidate_score = float(selected_score)
+                    self.awaiting_company = False
+                    await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
+                    return
                 self.ticket_data["company"] = company_text
 
             if phone and not self.ticket_data.get("contact"):
@@ -798,13 +870,13 @@ class CallSession:
             return
 
         if self.awaiting_contact:
-            phone = extract_phone_digits(text)
+            phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             if not phone:
                 interpreted = await self.interpret_fallback("numer telefonu kontaktowego", text)
                 if interpreted.get("blocked"):
                     await self.refuse_out_of_scope()
                     return
-                phone = extract_phone_digits(str(interpreted.get("contact", "") or ""))
+                phone = extract_phone_digits(str(interpreted.get("contact", "") or ""), self.settings.get("phone_validation_mode", "pl"))
 
                 if not phone and interpreted.get("intent") == "problem" and interpreted.get("description"):
                     self.ticket_data["description"] = str(interpreted["description"]).strip()
@@ -904,9 +976,14 @@ class CallSession:
 
         # Normalize contact phone numbers recognized with spaces, commas or dashes.
         contact_value = str(self.ticket_data.get("contact", "") or "")
-        contact_digits = re.sub(r"\D", "", contact_value)
-        if 9 <= len(contact_digits) <= 15:
+        contact_digits = extract_phone_digits(
+            contact_value,
+            self.settings.get("phone_validation_mode", "pl"),
+        )
+        if contact_digits:
             self.ticket_data["contact"] = contact_digits
+        elif contact_value:
+            self.ticket_data["contact"] = ""
 
         matched_customer, match_score = match_customer(
             str(self.ticket_data.get("company", "") or ""),
