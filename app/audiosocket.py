@@ -94,6 +94,36 @@ def extract_phone_digits(value: str):
     return digits if 9 <= len(digits) <= 15 else ""
 
 
+def looks_like_ticket_meta_request(text: str):
+    """Return True when the caller talks about creating/routing the ticket
+    instead of describing the actual service problem.
+    """
+    normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
+    if not normalized:
+        return False
+
+    # If there is an actual symptom/error in the same utterance, keep it as a
+    # valid problem description even if the caller also says "utwórz zgłoszenie".
+    problem_signals = (
+        "nie działa", "nie dziala", "nie mogę", "nie moge", "nie można", "nie mozna",
+        "błąd", "blad", "awaria", "usterka", "problem z", "brak ", "wyskakuje",
+        "zawiesza", "rozłącza", "rozlacza", "wolno działa", "wolno dziala",
+        "nie otwiera", "nie drukuje", "nie loguje", "nie zapisuje", "nie wysyła",
+        "nie wysyla", "przestał", "przestal", "zepsuł", "zepsul",
+    )
+    if any(signal in normalized for signal in problem_signals):
+        return False
+
+    meta_patterns = (
+        r"\b(utw[oó]rz|stw[oó]rz|zapisz|dodaj|za[łl][oó][żz])\b.*\bzg[łl]oszen",
+        r"\b(przeka[żz]|wy[śs]lij|prze[śs]lij)\b.*\b(serwis|zg[łl]oszen)",
+        r"\bzg[łl]o[śs]\b.*\b(serwis|to|spraw[ęe])",
+        r"\b(testowe|testowy|test)\b.*\bzg[łl]oszen",
+        r"\bzg[łl]oszenie\b.*\b(serwis|utw[oó]rz|zapisz|przeka[żz])",
+    )
+    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in meta_patterns)
+
+
 def matches_confirmation_phrase(text: str, phrases: tuple[str, ...]):
     normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
     if not normalized:
@@ -112,6 +142,8 @@ def apply_llm_fill_only(ticket_data: dict, ticket_update: dict):
         if key not in allowed_fill_keys:
             continue
         if value in (None, "", [], {}):
+            continue
+        if key == "description" and looks_like_ticket_meta_request(str(value)):
             continue
         if ticket_data.get(key):
             continue
@@ -644,6 +676,12 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
 
             elif self.correction_field == "description":
+                if looks_like_ticket_meta_request(text):
+                    await self.say(
+                        "To brzmi jak polecenie dotyczące zgłoszenia. "
+                        "Proszę opisać, na czym polega problem lub usterka."
+                    )
+                    return
                 self.ticket_data["description"] = text.strip()
                 self.ticket_data["title"] = text.strip()[:80] or "Zgłoszenie telefoniczne"
 
@@ -751,6 +789,13 @@ class CallSession:
         # Explicit conversation state beats LLM inference. If we just asked
         # for the problem, accept the next non-empty utterance as description.
         if self.awaiting_problem and not self.ticket_data.get("description"):
+            if looks_like_ticket_meta_request(text):
+                await self.say(
+                    "Oczywiście mogę zarejestrować zgłoszenie. "
+                    "Proszę opisać, na czym polega problem, który mam przekazać do serwisu."
+                )
+                return
+
             self.ticket_data["description"] = text.strip()
             self.awaiting_problem = False
 
@@ -834,6 +879,7 @@ class CallSession:
         if (
             not self.ticket_data.get("description")
             and len(text.strip()) >= 3
+            and not looks_like_ticket_meta_request(text)
             and any(word in previous_agent.lower() for word in problem_words)
         ):
             self.ticket_data["description"] = text.strip()
