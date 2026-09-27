@@ -60,6 +60,13 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertEqual(customer["name"], "Tomek")
         self.assertEqual(score, 1.0)
 
+        customer, score = match_customer("A fataszt.", "", [
+            {"name": "Alfatest", "phone": "880227784"},
+            {"name": "Tomek", "phone": "790205140"},
+        ])
+        self.assertEqual(customer["name"], "Alfatest")
+        self.assertGreaterEqual(score, 0.72)
+
     def test_fuzzy_customer_match_does_not_guess_ambiguous_short_name(self):
         directory = [
             {"name": "Artur", "phone": "604943274"},
@@ -73,6 +80,13 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertEqual(extract_phone_digits("792-032-104"), "792032104")
         self.assertEqual(extract_phone_digits("+48 792-032-104"), "792032104")
         self.assertEqual(extract_phone_digits("0048 792 032 104"), "792032104")
+        self.assertEqual(
+            extract_phone_digits(
+                "Osiemset osiemdziesiąt dwadziesta dwa siedemdziesiąt siedem osiemdziesiąt cztery."
+            ),
+            "880227784",
+        )
+        self.assertEqual(extract_phone_digits("siedem dziewięć dwa zero trzy dwa jeden zero cztery"), "792032104")
         self.assertEqual(extract_phone_digits("599-3131-2120"), "")
         self.assertEqual(extract_phone_digits("123"), "")
         self.assertEqual(extract_phone_digits("+44 20 7946 0958", "pl"), "")
