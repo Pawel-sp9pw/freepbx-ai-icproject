@@ -220,13 +220,12 @@ def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
         return True
 
     if mode == "company":
-        # Do not run an expensive second pass only because a company/name is
-        # short. The conversation layer already asks for confirmation when the
-        # confidence is weak. Retry STT only when the first pass is genuinely
-        # uncertain; this removes most of the 20-30 s delays seen on names.
-        if avg_logprob is None:
-            return len(words) <= 2
-        return avg_logprob < -0.55
+        # A second decode of a non-empty company name is very expensive on CPU
+        # and, in practice, often returns the same name with no improvement.
+        # Let the conversation layer handle low-confidence names with a quick
+        # yes/no confirmation. Retry only when pass 1 produced no usable text
+        # (empty / rejected hallucination).
+        return not clean
 
     if mode == "contact":
         digits = re.sub(r"\D", "", clean)
