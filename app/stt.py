@@ -17,6 +17,10 @@ PROMPT_LEAK_PHRASES = (
     "oczekiwane odpowiedzi",
     "krótka odpowiedź na pytanie o potwierdzenie",
     "krotka odpowiedz na pytanie o potwierdzenie",
+    "dzwoniący podaje nazwę swojej firmy po polsku",
+    "dzwoniacy podaje nazwe swojej firmy po polsku",
+    "dzwoniący opisuje problem techniczny lub usterkę po polsku",
+    "dzwoniacy opisuje problem techniczny lub usterke po polsku",
 )
 
 KNOWN_WHISPER_HALLUCINATIONS = (
@@ -210,13 +214,13 @@ def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
         return True
 
     if mode == "company":
-        # Short proper names remain the most difficult telephone case.
-        # Retry only when short or when Whisper itself is not confident.
-        if len(words) <= 2:
-            return True
+        # Do not run an expensive second pass only because a company/name is
+        # short. The conversation layer already asks for confirmation when the
+        # confidence is weak. Retry STT only when the first pass is genuinely
+        # uncertain; this removes most of the 20-30 s delays seen on names.
         if avg_logprob is None:
-            return False
-        return avg_logprob < -0.42
+            return len(words) <= 2
+        return avg_logprob < -0.55
 
     if mode == "contact":
         digits = re.sub(r"\D", "", clean)
