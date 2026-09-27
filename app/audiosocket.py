@@ -165,6 +165,7 @@ def looks_like_abusive_dismissal(text: str):
         # Common profanity variants and typical Polish STT confusions.
         r"\bspier(?:dal|dol|dziel)aj\b",
         r"\bspier(?:dal|dol|dziel)\s+si[ęe]\b",
+        r"\bspieprz(?:aj)?\b",
         r"\bspadaj\b",
         r"\bspad[aą]j\b",
         r"\bodczep\s+si[ęe]\b",
