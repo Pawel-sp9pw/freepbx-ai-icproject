@@ -632,6 +632,7 @@ class CallSession:
                 self.stt_prompt_for_state(),
                 self.stt_mode_for_state(),
                 True,
+                int(self.settings.get("stt_workers", 2) or 2),
             )
             if isinstance(stt_result, dict):
                 text = str(stt_result.get("selected", "") or "")
