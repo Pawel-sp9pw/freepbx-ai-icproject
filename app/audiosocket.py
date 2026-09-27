@@ -117,7 +117,7 @@ def _spoken_polish_number_digits(value: str):
 
     units = {
         "zero": 0, "jeden": 1, "jedna": 1, "jedno": 1,
-        "dwa": 2, "dwie": 2, "trzy": 3, "cztery": 4,
+        "dwa": 2, "dwie": 2, "trzy": 3, "trzech": 3, "czy": 3, "cztery": 4,
         "piec": 5, "szesc": 6, "siedem": 7, "osiem": 8, "dziewiec": 9,
     }
     teens = {
@@ -126,12 +126,12 @@ def _spoken_polish_number_digits(value: str):
         "siedemnascie": 17, "osiemnascie": 18, "dziewietnascie": 19,
     }
     tens = {
-        "dwadziescia": 20, "dwadziesta": 20, "trzydziesci": 30,
-        "czterdziesci": 40, "piecdziesiat": 50, "szescdziesiat": 60,
-        "siedemdziesiat": 70, "osiemdziesiat": 80, "dziewiecdziesiat": 90,
+        "dwadziescia": 20, "dwadziesta": 20, "dwudziestu": 20, "trzydziesci": 30, "trzydziestu": 30,
+        "czterdziesci": 40, "czterdziestu": 40, "piecdziesiat": 50, "piecdziesieciu": 50, "szescdziesiat": 60, "szescdziesieciu": 60,
+        "siedemdziesiat": 70, "siedemdziesieciu": 70, "osiemdziesiat": 80, "osiemdziesieciu": 80, "dziewiecdziesiat": 90, "dziewiecdziesieciu": 90,
     }
     hundreds = {
-        "sto": 100, "dwiescie": 200, "trzysta": 300, "czterysta": 400,
+        "sto": 100, "stu": 100, "dwiescie": 200, "trzysta": 300, "czterysta": 400,
         "piecset": 500, "szescset": 600, "siedemset": 700,
         "osiemset": 800, "dziewiecset": 900,
     }
