@@ -384,6 +384,23 @@ class CallSession:
                     if len(pcm) >= 320 * 15:
                         await self.process_utterance(pcm)
 
+    def stt_mode_for_state(self):
+        if self.confirmation_pending:
+            return "confirmation"
+        if self.awaiting_correction and self.correction_field == "company":
+            return "company"
+        if self.awaiting_company:
+            return "company"
+        if self.awaiting_correction and self.correction_field == "contact":
+            return "contact"
+        if self.awaiting_contact:
+            return "contact"
+        if self.awaiting_correction and self.correction_field == "description":
+            return "problem"
+        if self.awaiting_problem:
+            return "problem"
+        return "normal"
+
     def stt_prompt_for_state(self):
         customer_names = ", ".join(x["name"] for x in self.customer_directory)
         base = (self.settings.get("stt_prompt", "") or "").strip()
@@ -394,21 +411,15 @@ class CallSession:
             return "tak, nie"
 
         if self.awaiting_correction and self.correction_field == "company":
-            prompt = (
-                "Nazwa firmy po polsku. "
-                "Pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja."
-            )
+            prompt = "pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja"
             if customer_names:
-                prompt += " Nazwy klientów: " + customer_names
+                prompt += ", " + customer_names
             return prompt
 
         if self.awaiting_company:
-            prompt = (
-                "Nazwa firmy po polsku. "
-                "Pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja."
-            )
+            prompt = "pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja"
             if customer_names:
-                prompt += " Nazwy klientów: " + customer_names
+                prompt += ", " + customer_names
             return prompt
 
         if self.awaiting_correction and self.correction_field == "contact":
@@ -439,6 +450,7 @@ class CallSession:
                 self.settings["whisper_compute_type"],
                 8000,
                 self.stt_prompt_for_state(),
+                self.stt_mode_for_state(),
             )
         except Exception:
             log.exception("[%s] STT error", self.call_id)
