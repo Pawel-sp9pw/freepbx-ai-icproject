@@ -140,7 +140,7 @@ def list_calls(limit=30):
             SELECT c.*,
                    ROUND((julianday(COALESCE(c.ended_at, CURRENT_TIMESTAMP)) -
                           julianday(c.started_at)) * 86400) AS duration_seconds,
-                   (SELECT COUNT(*) FROM messages m WHERE m.call_id=c.call_id) AS message_count
+                   (SELECT COUNT(*) FROM messages m WHERE m.call_id=c.call_id AND m.role IN ('user','assistant')) AS message_count
             FROM calls c
             ORDER BY c.started_at DESC
             LIMIT ?
