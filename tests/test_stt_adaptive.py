@@ -43,9 +43,12 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertFalse(stt._needs_adaptive_retry("Paweł", -0.49, "company"))
         self.assertFalse(stt._needs_adaptive_retry("Pizzeria Roma", -0.30, "company"))
 
-    def test_uncertain_short_company_still_retries(self):
-        self.assertTrue(stt._needs_adaptive_retry("Sąbeks", -0.88, "company"))
-        self.assertTrue(stt._needs_adaptive_retry("Artur", -0.70, "company"))
+    def test_uncertain_short_company_does_not_retry(self):
+        self.assertFalse(stt._needs_adaptive_retry("Sąbeks", -0.88, "company"))
+        self.assertFalse(stt._needs_adaptive_retry("Artur", -0.70, "company"))
+
+    def test_empty_company_still_retries(self):
+        self.assertTrue(stt._needs_adaptive_retry("", None, "company"))
 
     def test_long_confident_company_skips_retry(self):
         self.assertFalse(
@@ -87,10 +90,9 @@ class AdaptiveSTTTests(unittest.TestCase):
         selected = stt._choose_candidate("Pizzeria", -0.20, "Fitzseria", -0.50)
         self.assertEqual(selected, "Pizzeria")
 
-    def test_company_short_audio_runs_precision_pass(self):
+    def test_company_nonempty_low_confidence_skips_precision_pass(self):
         model = FakeModel([
-            ("Fitzseria", -0.55),
-            ("Pizzeria", -0.18),
+            ("Tomek", -0.84),
         ])
         with patch.object(stt, "get_model", return_value=model):
             text = stt.transcribe_pcm16(
@@ -99,16 +101,14 @@ class AdaptiveSTTTests(unittest.TestCase):
                 device="cpu",
                 compute_type="int8",
                 sample_rate=8000,
-                initial_prompt="pizzeria, przychodnia",
+                initial_prompt="Dzwoniący podaje nazwę swojej firmy po polsku.",
                 mode="company",
             )
 
-        self.assertEqual(text, "Pizzeria")
-        self.assertEqual(len(model.calls), 2)
+        self.assertEqual(text, "Tomek")
+        self.assertEqual(len(model.calls), 1)
         self.assertEqual(model.calls[0]["beam_size"], 5)
         self.assertFalse(model.calls[0]["vad_filter"])
-        self.assertEqual(model.calls[1]["beam_size"], 8)
-        self.assertFalse(model.calls[1]["vad_filter"])
 
     def test_company_second_pass_drops_prompt(self):
         model = FakeModel([
