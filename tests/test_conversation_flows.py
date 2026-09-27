@@ -250,6 +250,24 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.ticket_data["company"], "Beta Med")
         self.assertTrue(h.session.awaiting_contact)
 
+    def test_extract_problem_fragment_from_mixed_company_utterance(self):
+        self.assertEqual(
+            audiosocket.extract_problem_fragment(
+                "Dzień dobry. Tu Tomek. Nie działa nam poczta."
+            ),
+            "Nie działa nam poczta",
+        )
+        self.assertEqual(
+            audiosocket.extract_problem_fragment(
+                "Dzień dobry, tu Marcin, nie działa nam poczta"
+            ),
+            "nie działa nam poczta",
+        )
+        self.assertEqual(
+            audiosocket.extract_problem_fragment("Dzień dobry, tu Tomek."),
+            "",
+        )
+
     async def test_company_and_problem_in_one_utterance_are_not_asked_twice(self):
         h = ConversationHarness()
         h.session.ticket_data = {"contact": "790205140"}
@@ -259,7 +277,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
                 "intent": "problem",
                 "company": "Tomek",
                 "contact": "",
-                "description": "Nie działa nam poczta",
+                "description": "",
                 "blocked": False,
             }
 
