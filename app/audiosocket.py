@@ -358,6 +358,7 @@ class CallSession:
         self.company_candidate_score = None
         self.company_confirmation_context = ""
         self.company_candidate_phone = ""
+        self.early_problem_score = None
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -761,6 +762,28 @@ class CallSession:
                     return
 
                 self.awaiting_company = False
+
+                if self.ticket_data.get("description"):
+                    if not self.ticket_data.get("title"):
+                        description = str(self.ticket_data.get("description", "") or "").strip()
+                        self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
+
+                    if self.ticket_data.get("contact"):
+                        self.awaiting_contact = False
+                        self.awaiting_problem = False
+                        if self.problem_confidence_is_high(self.early_problem_score):
+                            await self.finalize_ticket()
+                        else:
+                            self.confirmation_pending = True
+                            self.confirmation_misses = 0
+                            await self.say_confirmation_summary()
+                        return
+
+                    self.awaiting_contact = True
+                    self.awaiting_problem = False
+                    await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                    return
+
                 if self.ticket_data.get("contact"):
                     self.awaiting_problem = True
                     await self.say("Dziękuję. Proszę opisać problem.")
@@ -1045,6 +1068,7 @@ class CallSession:
                     )
                 if interpreted.get("description"):
                     self.ticket_data["description"] = str(interpreted["description"]).strip()
+                    self.early_problem_score = selected_score
 
             matched_customer, match_score = match_customer(
                 company_text,
@@ -1076,6 +1100,27 @@ class CallSession:
                 self.ticket_data["contact"] = phone
 
             self.awaiting_company = False
+
+            if self.ticket_data.get("description"):
+                if not self.ticket_data.get("title"):
+                    description = str(self.ticket_data.get("description", "") or "").strip()
+                    self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
+
+                if self.ticket_data.get("contact"):
+                    self.awaiting_contact = False
+                    self.awaiting_problem = False
+                    if self.problem_confidence_is_high(self.early_problem_score):
+                        await self.finalize_ticket()
+                    else:
+                        self.confirmation_pending = True
+                        self.confirmation_misses = 0
+                        await self.say_confirmation_summary()
+                    return
+
+                self.awaiting_contact = True
+                self.awaiting_problem = False
+                await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                return
 
             if self.ticket_data.get("contact"):
                 self.awaiting_problem = True
@@ -1120,6 +1165,21 @@ class CallSession:
                     self.ticket_data["contact"] = matched_customer["phone"]
 
             self.awaiting_contact = False
+
+            if self.ticket_data.get("description"):
+                if not self.ticket_data.get("title"):
+                    description = str(self.ticket_data.get("description", "") or "").strip()
+                    self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
+
+                self.awaiting_problem = False
+                if self.problem_confidence_is_high(self.early_problem_score):
+                    await self.finalize_ticket()
+                else:
+                    self.confirmation_pending = True
+                    self.confirmation_misses = 0
+                    await self.say_confirmation_summary()
+                return
+
             self.awaiting_problem = True
             await self.say("Dziękuję. Proszę opisać problem.")
             return
@@ -1142,6 +1202,7 @@ class CallSession:
                 return
 
             self.ticket_data["description"] = text.strip()
+            self.early_problem_score = selected_score
             self.awaiting_problem = False
 
             # Fast path for recognized callers: company and contact already came
