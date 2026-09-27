@@ -113,6 +113,14 @@
   <div class="card">
     <h2>Rozmowy</h2>
     <p class="muted">Historia jest zapisywana lokalnie w SQLite od momentu instalacji tej wersji.</p>
+    <div class="call-tools" style="align-items:end;margin:8px 0 12px 0">
+      <label style="margin:0;max-width:150px">Ostatnie X rozmów
+        <input id="bulkDebugLimit" type="number" min="1" max="200" value="20" style="margin-top:4px">
+      </label>
+      <button type="button" class="test" onclick="copyRecentCallsDebug()">Kopiuj zbiorczy debug</button>
+      <button type="button" class="test" onclick="downloadRecentCallsDebug()">Pobierz debug .txt</button>
+      <span id="bulkDebugStatus" class="muted"></span>
+    </div>
     <div style="overflow-x:auto">
       <table>
         <thead>
@@ -644,6 +652,83 @@ PersistentKeepalive = 25"></textarea>
       else if(includeDebug) lines.push((m.role || 'inne')+': '+m.content);
     }
     return lines.join('\n');
+  }
+
+  function recentDebugLimit(){
+    const el=document.getElementById('bulkDebugLimit');
+    const raw=Number(el?.value || 20);
+    const value=Math.max(1,Math.min(200,Number.isFinite(raw)?Math.floor(raw):20));
+    if(el) el.value=String(value);
+    return value;
+  }
+
+  function callsDebugBundleText(items){
+    const calls=Array.isArray(items)?items:[];
+    const lines=[
+      'ZBIORCZY DEBUG ROZMÓW',
+      'Liczba rozmów: '+calls.length,
+      'Wygenerowano: '+new Date().toLocaleString('pl-PL'),
+      ''
+    ];
+    calls.forEach((call,index)=>{
+      if(index>0) lines.push('', '============================================================', '');
+      lines.push(callClipboardText(call,true));
+    });
+    return lines.join('\n');
+  }
+
+  async function fetchRecentCallsDebug(){
+    const limit=recentDebugLimit();
+    const r=await fetch('/api/calls/debug-bundle?limit='+encodeURIComponent(limit),{cache:'no-store'});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.detail || 'Błąd pobierania zbiorczego debuga');
+    return j.items || [];
+  }
+
+  async function copyRecentCallsDebug(){
+    const status=document.getElementById('bulkDebugStatus');
+    if(status){ status.textContent=' przygotowuję...'; status.className='muted'; }
+    try{
+      const items=await fetchRecentCallsDebug();
+      await writeClipboard(callsDebugBundleText(items));
+      if(status){
+        status.textContent=' skopiowano '+items.length+' rozmów';
+        status.className='ok';
+      }
+    }catch(e){
+      if(status){
+        status.textContent=' błąd: '+e;
+        status.className='err';
+      }
+    }
+  }
+
+  async function downloadRecentCallsDebug(){
+    const status=document.getElementById('bulkDebugStatus');
+    if(status){ status.textContent=' przygotowuję...'; status.className='muted'; }
+    try{
+      const items=await fetchRecentCallsDebug();
+      const text=callsDebugBundleText(items);
+      const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+      a.href=url;
+      a.download='freepbx-ai-debug-'+items.length+'-rozmow-'+stamp+'.txt';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+      if(status){
+        status.textContent=' pobrano '+items.length+' rozmów';
+        status.className='ok';
+      }
+    }catch(e){
+      if(status){
+        status.textContent=' błąd: '+e;
+        status.className='err';
+      }
+    }
   }
 
   async function copyCall(callId, includeDebug){
