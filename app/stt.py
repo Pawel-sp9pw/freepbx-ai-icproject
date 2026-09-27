@@ -229,9 +229,13 @@ def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
 
     if mode == "contact":
         digits = re.sub(r"\D", "", clean)
-        # A structurally valid phone number is already strong evidence. Do not
-        # spend a second decode only because avg_logprob is slightly low.
+        # A structurally valid phone number is already strong evidence.
         if 9 <= len(digits) <= 15:
+            return False
+        # Spoken phone numbers usually arrive as 5+ number words. A second
+        # decode has repeatedly returned the same text, while the conversation
+        # layer can normalize Polish number words deterministically.
+        if len(words) >= 5:
             return False
         return True
 
