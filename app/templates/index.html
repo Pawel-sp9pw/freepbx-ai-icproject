@@ -210,9 +210,31 @@
         <div><label>Cisza kończąca wypowiedź [ms]<input type="number" name="silence_ms" value="{{s.silence_ms}}"></label></div>
       </div>
       <label>Słownik / podpowiedzi STT
-        <textarea name="stt_prompt" placeholder="Np. Virtual World, PCMED, MediQus, P1, NFZ, e-recepta">{{s.stt_prompt}}</textarea>
+        <textarea name="stt_prompt" placeholder="Ogólny kontekst rozmowy">{{s.stt_prompt}}</textarea>
       </label>
-      <div class="muted">Wpisz nazwy klientów, produktów i skróty, które agent ma lepiej rozpoznawać.</div>
+      <div class="muted">Krótki, naturalny kontekst rozmowy. Nie wpisuj tu długich list nazw klientów.</div>
+
+      <label>Podpowiedź STT dla opisu problemu
+        <textarea name="stt_problem_hint" placeholder="Np. Problem może dotyczyć e-recepty, P1, NFZ...">{{s.stt_problem_hint}}</textarea>
+      </label>
+      <div class="muted">Krótka podpowiedź branżowa używana tylko wtedy, gdy klient opisuje problem.</div>
+
+      <div class="grid">
+        <div>
+          <label>Próg potwierdzenia nieznanej firmy
+            <input type="number" step="0.05" min="-2" max="0" name="company_confirm_logprob" value="{{s.company_confirm_logprob}}">
+          </label>
+          <div class="muted">Niższa wartość = mniej pytań. Domyślnie -0.55.</div>
+        </div>
+        <div>
+          <label>Walidacja numeru telefonu
+            <select name="phone_validation_mode">
+              <option value="pl" {% if s.phone_validation_mode=='pl' %}selected{% endif %}>Polska — 9 cyfr / +48 / 0048</option>
+              <option value="international" {% if s.phone_validation_mode=='international' %}selected{% endif %}>Międzynarodowa — 7–15 cyfr</option>
+            </select>
+          </label>
+        </div>
+      </div>
 
       <label>Słownik klientów
         <textarea name="customer_directory" placeholder="Virtual World | 792032104&#10;Przychodnia Test | 600100200">{{s.customer_directory}}</textarea>
@@ -545,6 +567,26 @@ PersistentKeepalive = 25"></textarea>
         (c.error ? '<div class="err" style="margin-top:8px"><strong>Błąd:</strong> '+esc(c.error)+'</div>' : '');
 
       for(const m of (c.messages || [])){
+        if(m.role==='stt_debug'){
+          let summary='Diagnostyka STT';
+          try{
+            const d=JSON.parse(m.content || '{}');
+            const p1=d.pass1 || {};
+            const p2=d.pass2 || {};
+            const score=(d.selected_score===null || d.selected_score===undefined) ? 'n/a' : Number(d.selected_score).toFixed(3);
+            summary='STT · '+esc(d.mode || 'normal')+' · score '+esc(score)+(d.retry?' · retry':'');
+            let details='wybrano: '+(d.selected || '—')+
+              '\npass1: '+(p1.text || '—')+' | score='+(p1.score===null || p1.score===undefined?'n/a':Number(p1.score).toFixed(3))+
+              (p1.rejected?' | odrzucono: '+(p1.reason || ''):'')+
+              (d.pass2?'\npass2: '+(p2.text || '—')+' | score='+(p2.score===null || p2.score===undefined?'n/a':Number(p2.score).toFixed(3))+
+              (p2.rejected?' | odrzucono: '+(p2.reason || ''):''):'')+
+              (d.retry_reason?'\npowód retry: '+d.retry_reason:'');
+            html+='<details class="msg" style="background:#f7f7f7"><summary><strong>'+summary+'</strong></summary><pre style="white-space:pre-wrap;margin:8px 0 0 0">'+esc(details)+'</pre></details>';
+          }catch(e){
+            html+='<details class="msg"><summary><strong>Diagnostyka STT</strong></summary><pre>'+esc(m.content)+'</pre></details>';
+          }
+          continue;
+        }
         const cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'');
         const who=m.role==='user'?'Klient':(m.role==='assistant'?'Agent':m.role);
         html+='<div class="msg '+cls+'"><strong>'+esc(who)+'</strong><br>'+esc(m.content)+'</div>';
