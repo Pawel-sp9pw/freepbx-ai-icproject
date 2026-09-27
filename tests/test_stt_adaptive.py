@@ -36,8 +36,9 @@ class AdaptiveSTTTests(unittest.TestCase):
             )
         )
 
-    def test_problem_never_uses_company_retry_rule(self):
-        self.assertFalse(stt._needs_adaptive_retry("Nie działa recepta", -0.8, "problem"))
+    def test_problem_retries_only_when_confidence_is_low(self):
+        self.assertTrue(stt._needs_adaptive_retry("Nie działa recepta", -0.8, "problem"))
+        self.assertFalse(stt._needs_adaptive_retry("Nie działa recepta", -0.3, "problem"))
 
     def test_better_second_candidate_is_selected(self):
         selected = stt._choose_candidate("Fitzseria", -0.55, "Pizzeria", -0.20)
@@ -65,10 +66,38 @@ class AdaptiveSTTTests(unittest.TestCase):
 
         self.assertEqual(text, "Pizzeria")
         self.assertEqual(len(model.calls), 2)
-        self.assertEqual(model.calls[0]["beam_size"], 3)
+        self.assertEqual(model.calls[0]["beam_size"], 5)
         self.assertTrue(model.calls[0]["vad_filter"])
-        self.assertEqual(model.calls[1]["beam_size"], 5)
+        self.assertEqual(model.calls[1]["beam_size"], 8)
         self.assertFalse(model.calls[1]["vad_filter"])
+
+    def test_low_confidence_problem_runs_second_pass_without_prompt(self):
+        model = FakeModel([
+            ("Nie działa recepcja", -0.85),
+            ("Nie działa recepta", -0.30),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            text = stt.transcribe_pcm16(
+                b"\x00" * 16000,
+                model_name="small",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Opis problemu serwisowego po polsku.",
+                mode="problem",
+            )
+
+        self.assertEqual(text, "Nie działa recepta")
+        self.assertEqual(len(model.calls), 2)
+        self.assertEqual(model.calls[0]["beam_size"], 5)
+        self.assertEqual(model.calls[1]["beam_size"], 8)
+        self.assertIsNone(model.calls[1]["initial_prompt"])
+
+    def test_phone_audio_is_resampled_to_16khz(self):
+        pcm = (b"\x01\x00" * 8000)
+        out, rate = stt._prepare_phone_audio(pcm, 8000)
+        self.assertEqual(rate, 16000)
+        self.assertGreater(len(out), len(pcm))
 
     def test_confirmation_is_always_single_pass(self):
         model = FakeModel([
