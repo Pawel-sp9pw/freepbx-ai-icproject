@@ -23,6 +23,19 @@ class FakeModel:
 
 
 class AdaptiveSTTTests(unittest.TestCase):
+    def test_known_subtitle_hallucinations_are_rejected(self):
+        samples = [
+            "www.youtube.com www.youtube.com",
+            "www.multi-moto.eu",
+            "napisy stworzone przez społeczność Amara.org",
+            "Transkrypcja Jan Kowalski",
+            "Dziękuję za obejrzenie",
+        ]
+        for sample in samples:
+            bad, reason = stt._looks_hallucinated(sample, 2.5)
+            self.assertTrue(bad, sample)
+            self.assertTrue(reason)
+
     def test_short_company_requests_retry(self):
         self.assertTrue(stt._needs_adaptive_retry("Fitzseria", -0.10, "company"))
         self.assertTrue(stt._needs_adaptive_retry("Pizzeria Roma", -0.10, "company"))
@@ -89,6 +102,27 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertFalse(model.calls[0]["vad_filter"])
         self.assertEqual(model.calls[1]["beam_size"], 8)
         self.assertFalse(model.calls[1]["vad_filter"])
+
+    def test_company_second_pass_drops_prompt(self):
+        model = FakeModel([
+            ("Fitzseria", -0.55),
+            ("Pizzeria", -0.18),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            text = stt.transcribe_pcm16(
+                b"\x00" * 16000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący podaje nazwę swojej firmy po polsku.",
+                mode="company",
+            )
+
+        self.assertEqual(text, "Pizzeria")
+        self.assertEqual(len(model.calls), 2)
+        self.assertIsNotNone(model.calls[0]["initial_prompt"])
+        self.assertIsNone(model.calls[1]["initial_prompt"])
 
     def test_low_confidence_problem_runs_second_pass_without_prompt(self):
         model = FakeModel([
