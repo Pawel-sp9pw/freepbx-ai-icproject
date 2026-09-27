@@ -216,6 +216,46 @@ def get_call(call_id: str):
     return result
 
 
+def get_recent_calls_with_messages(limit=20):
+    """Return the newest calls with their complete transcript/debug messages."""
+    limit = max(1, min(int(limit), 200))
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM calls
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        call_ids = [item["call_id"] for item in items]
+        messages_by_call = {call_id: [] for call_id in call_ids}
+
+        if call_ids:
+            placeholders = ",".join("?" for _ in call_ids)
+            messages = conn.execute(
+                f"""
+                SELECT call_id,created_at,role,content
+                FROM messages
+                WHERE call_id IN ({placeholders})
+                ORDER BY id
+                """,
+                call_ids,
+            ).fetchall()
+            for message in messages:
+                messages_by_call.setdefault(message["call_id"], []).append({
+                    "created_at": message["created_at"],
+                    "role": message["role"],
+                    "content": message["content"],
+                })
+
+    for item in items:
+        item["messages"] = messages_by_call.get(item["call_id"], [])
+    return items
+
+
 def runtime_status():
     with _db() as conn:
         active = conn.execute(
