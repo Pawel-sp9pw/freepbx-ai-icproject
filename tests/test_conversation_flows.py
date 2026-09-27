@@ -249,6 +249,53 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             any("cyfra po cyfrze" in x.lower() for x in h.spoken)
         )
 
+    async def test_recognized_caller_negative_confirmation_corrects_only_problem(self):
+        h = ConversationHarness()
+        h.session.caller_matched_customer = True
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Nie da się wysyłać skierowań")
+        self.assertTrue(h.session.confirmation_pending)
+
+        await h.user("nie")
+
+        self.assertTrue(h.session.awaiting_correction)
+        self.assertEqual(h.session.correction_field, "description")
+        self.assertEqual(h.session.ticket_data["company"], "Paweł")
+        self.assertEqual(h.session.ticket_data["contact"], "792032104")
+        self.assertTrue(any("poprawny opis problemu" in x.lower() for x in h.spoken))
+
+        await h.user("Nie da się wysyłać e-skierowań")
+
+        self.assertEqual(h.session.ticket_data["company"], "Paweł")
+        self.assertEqual(h.session.ticket_data["contact"], "792032104")
+        self.assertEqual(
+            h.session.ticket_data["description"],
+            "Nie da się wysyłać e-skierowań",
+        )
+        self.assertTrue(h.session.confirmation_pending)
+
+    async def test_unrecognized_caller_still_can_select_field_to_correct(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Pizzeria",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Nie działa drukarka")
+        await h.user("nie")
+
+        self.assertTrue(h.session.awaiting_correction)
+        self.assertEqual(h.session.correction_field, "")
+        self.assertTrue(
+            any("nazwę firmy" in x.lower() and "numer kontaktowy" in x.lower() for x in h.spoken)
+        )
+
     async def test_company_correction_replaces_only_company(self):
         h = ConversationHarness()
         h.session.ticket_data = {
