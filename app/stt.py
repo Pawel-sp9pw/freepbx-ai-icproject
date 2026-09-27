@@ -43,23 +43,29 @@ KNOWN_WHISPER_HALLUCINATIONS = (
 )
 
 
-def get_model(name: str, device: str, compute_type: str):
-    cpu_threads = min(8, max(1, int(os.cpu_count() or 1))) if device == "cpu" else 0
-    key = (name, device, compute_type, cpu_threads)
+def get_model(name: str, device: str, compute_type: str, num_workers: int = 1):
+    workers = max(1, min(4, int(num_workers or 1)))
+    total_cpu = max(1, int(os.cpu_count() or 1))
+    cpu_threads = min(8, max(1, total_cpu // workers)) if device == "cpu" else 0
+    key = (name, device, compute_type, cpu_threads, workers)
     if key not in _models:
         kwargs = {
             "device": device,
             "compute_type": compute_type,
         }
         if device == "cpu":
+            # CTranslate2 can execute several transcribe calls concurrently.
+            # Split CPU threads between workers instead of letting one call
+            # monopolize every vCPU.
             kwargs["cpu_threads"] = cpu_threads
-            kwargs["num_workers"] = 1
+            kwargs["num_workers"] = workers
         _models[key] = WhisperModel(name, **kwargs)
         log.info(
-            "Loaded Whisper model %s on %s (%s), cpu_threads=%s",
+            "Loaded Whisper model %s on %s (%s), workers=%s, cpu_threads_per_worker=%s",
             name,
             device,
             compute_type,
+            workers if device == "cpu" else "n/a",
             cpu_threads if device == "cpu" else "n/a",
         )
     return _models[key]
@@ -304,6 +310,7 @@ def transcribe_pcm16(
     initial_prompt="",
     mode="normal",
     return_metadata=False,
+    num_workers=1,
 ):
     prepared_pcm, prepared_rate = _prepare_phone_audio(pcm, sample_rate)
 
@@ -317,12 +324,14 @@ def transcribe_pcm16(
             w.setframerate(prepared_rate)
             w.writeframes(prepared_pcm)
 
-        model = get_model(model_name, device, compute_type)
+        workers = max(1, min(4, int(num_workers or 1)))
+        model = get_model(model_name, device, compute_type, workers)
         audio_seconds = len(pcm) / 2 / float(sample_rate)
         meta = {
             "mode": mode,
             "audio_seconds": round(audio_seconds, 3),
             "model": model_name,
+            "workers": workers,
             "pass1": None,
             "pass2": None,
             "retry": False,
