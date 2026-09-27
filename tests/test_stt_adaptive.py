@@ -77,10 +77,31 @@ class AdaptiveSTTTests(unittest.TestCase):
             )
         )
 
-    def test_contact_retries_only_when_invalid_or_uncertain(self):
+    def test_contact_retries_only_when_structurally_invalid(self):
         self.assertFalse(stt._needs_adaptive_retry("792032104", -0.1, "contact"))
-        self.assertTrue(stt._needs_adaptive_retry("792032104", -0.8, "contact"))
+        self.assertFalse(stt._needs_adaptive_retry("792032104", -0.8, "contact"))
         self.assertTrue(stt._needs_adaptive_retry("79203", -0.1, "contact"))
+
+    def test_identical_second_candidate_keeps_first_score(self):
+        model = FakeModel([
+            ("880227784", -0.56),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 16000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Numer telefonu. Cyfry od zera do dziewięciu.",
+                mode="contact",
+                return_metadata=True,
+            )
+
+        self.assertEqual(result["selected"], "880227784")
+        self.assertEqual(result["selected_score"], -0.56)
+        self.assertFalse(result["retry"])
+        self.assertEqual(len(model.calls), 1)
 
     def test_better_second_candidate_is_selected(self):
         selected = stt._choose_candidate("Fitzseria", -0.55, "Pizzeria", -0.20)
