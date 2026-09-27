@@ -210,6 +210,16 @@
         <div><label>Whisper model<input name="whisper_model" value="{{s.whisper_model}}"></label></div>
         <div><label>Device<input name="whisper_device" value="{{s.whisper_device}}"></label></div>
         <div><label>Compute type<input name="whisper_compute_type" value="{{s.whisper_compute_type}}"></label></div>
+        <div>
+          <label>Równoległe workery STT
+            <select name="stt_workers">
+              {% for n in [1,2,3,4] %}
+              <option value="{{n}}" {% if s.stt_workers|int == n %}selected{% endif %}>{{n}}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <div class="muted">Dla 8 vCPU i 2 jednoczesnych rozmów zalecane: 2. CPU zostanie podzielone między workery.</div>
+        </div>
         <div><label>Cisza kończąca wypowiedź [ms]<input type="number" name="silence_ms" value="{{s.silence_ms}}"></label></div>
       </div>
       <label>Słownik / podpowiedzi STT
@@ -599,6 +609,7 @@ PersistentKeepalive = 25"></textarea>
       if(d.retry_reason) out+='\n  retry_reason='+d.retry_reason;
       if(d.audio_seconds!==undefined) out+='\n  audio_seconds='+d.audio_seconds;
       if(d.model) out+='\n  model='+d.model;
+      if(d.workers!==undefined) out+='\n  workers='+d.workers;
       return out;
     }catch(e){
       return '[STT raw] '+String(content || '');
