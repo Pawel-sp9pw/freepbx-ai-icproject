@@ -161,7 +161,7 @@ def looks_like_ticket_meta_request(text: str):
         return False
 
     meta_patterns = (
-        r"\b(utw[oó]rz|stw[oó]rz|zapisz|dodaj|za[łl][oó][żz])\b.*\bzg[łl]oszen",
+        r"\b(utw[oó]rz|stw[oó]rz|zapisz|dodaj|za[łl][oó][żz]|przyjmij|zarejestruj)\b.*\bzg[łl]oszen",
         r"\b(przeka[żz]|wy[śs]lij|prze[śs]lij)\b.*\b(serwis|zg[łl]oszen)",
         r"\bzg[łl]o[śs]\b.*\b(serwis|to|spraw[ęe])",
         r"\b(testowe|testowy|test)\b.*\bzg[łl]oszen",
