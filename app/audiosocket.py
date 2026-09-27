@@ -4,6 +4,7 @@ import logging
 import re
 import struct
 import time
+import unicodedata
 import uuid
 from collections import deque
 from difflib import SequenceMatcher
@@ -81,7 +82,21 @@ def parse_customer_directory(raw: str):
 
 
 def normalize_company(value: str):
-    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+    text = (value or "").lower()
+    # Normalize Polish diacritics and common conversational prefixes so that
+    # short STT variants can be compared fairly with the customer directory.
+    text = text.translate(str.maketrans({
+        "ą": "a", "ć": "c", "ę": "e", "ł": "l",
+        "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+    }))
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(
+        r"\b(?:dzien dobry|dobry wieczor|czesc|witam|firma|spolka|tu|z tej strony)\b",
+        " ",
+        text,
+    )
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
 
 
 def speak_phone(value: str):
@@ -348,15 +363,12 @@ def extract_problem_fragment(text: str):
 
 def match_customer(company: str, contact: str, directory: list):
     contact_digits = re.sub(r"\D", "", contact or "")
-    # Phone match is strongest and can repair a badly recognized company name.
+    # Phone/CallerID is authoritative and always wins over fuzzy name matching.
     if contact_digits:
         for item in directory:
             phone = re.sub(r"\D", "", item.get("phone", "") or "")
             if not phone:
                 continue
-            # Exact match is always allowed. Suffix matching is only safe for
-            # normal telephone numbers; never match a 2-8 digit directory entry
-            # against the tail of another caller number.
             exact = contact_digits == phone
             suffix = (
                 len(contact_digits) >= 9
@@ -373,18 +385,41 @@ def match_customer(company: str, contact: str, directory: list):
     if not source:
         return None, 0.0
 
-    best = None
-    best_score = 0.0
+    candidates = []
     for item in directory:
         target = normalize_company(item.get("name", ""))
         if not target:
             continue
+
         score = SequenceMatcher(None, source, target).ratio()
-        if source in target or target in source:
-            score = max(score, 0.88)
-        if score > best_score:
-            best, best_score = item, score
-    return (best, best_score) if best_score >= 0.58 else (None, best_score)
+
+        # Exact token containment is a strong signal for inputs such as
+        # "Firma Paweł" vs "Paweł", after conversational prefixes are removed.
+        if source == target:
+            score = 1.0
+        elif source in target or target in source:
+            score = max(score, 0.90)
+
+        candidates.append((score, item))
+
+    if not candidates:
+        return None, 0.0
+
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    best_score, best = candidates[0]
+    second_score = candidates[1][0] if len(candidates) > 1 else 0.0
+    margin = best_score - second_score
+
+    # Short names are especially prone to Whisper substitutions (Atul/Ator
+    # for Artur). Allow a slightly lower score only when the best candidate
+    # clearly beats every alternative. Otherwise ask for confirmation.
+    compact_len = len(source.replace(" ", ""))
+    if compact_len <= 6:
+        accepted = best_score >= 0.62 and margin >= 0.18
+    else:
+        accepted = best_score >= 0.72 and margin >= 0.12
+
+    return (best, best_score) if accepted else (None, best_score)
 
 
 class CallSession:
