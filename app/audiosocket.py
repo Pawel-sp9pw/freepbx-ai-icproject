@@ -140,6 +140,41 @@ def looks_like_invalid_company_name(value: str):
     return False
 
 
+def looks_like_abusive_dismissal(text: str):
+    """Detect a hostile/dismissive utterance that means the caller is done.
+
+    Do not treat profanity itself as a problem description. If the same
+    utterance contains a concrete technical symptom, keep it as a valid
+    service problem.
+    """
+    normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
+    if not normalized:
+        return False
+
+    problem_signals = (
+        "nie działa", "nie dziala", "nie mogę", "nie moge", "nie można", "nie mozna",
+        "błąd", "blad", "awaria", "usterka", "problem z", "brak ", "wyskakuje",
+        "zawiesza", "rozłącza", "rozlacza", "nie otwiera", "nie drukuje",
+        "nie loguje", "nie zapisuje", "nie wysyła", "nie wysyla", "przestał",
+        "przestal", "zepsuł", "zepsul",
+    )
+    if any(signal in normalized for signal in problem_signals):
+        return False
+
+    patterns = (
+        r"\bspierdalaj\b",
+        r"\bspadaj\b",
+        r"\bodczep\s+si[ęe]\b",
+        r"\bodwal\s+si[ęe]\b",
+        r"\bodp(?:ieprz|ierdol)\s+si[ęe]\b",
+        r"\bdaj\s+(mi\s+)?spok[oó]j\b",
+        r"\bnie\s+chc[ęe]\s+(z\s+tob[aą]\s+)?rozmawia[ćc]\b",
+        r"\bnie\s+dzwo[ńn]\b",
+        r"\bko[ńn]cz\b",
+    )
+    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+
+
 def looks_like_human_handoff_request(text: str):
     """Detect requests to speak with a human instead of a service problem."""
     normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
@@ -219,6 +254,7 @@ def apply_llm_fill_only(ticket_data: dict, ticket_update: dict):
         if key == "description" and (
             looks_like_ticket_meta_request(str(value))
             or looks_like_human_handoff_request(str(value))
+            or looks_like_abusive_dismissal(str(value))
         ):
             continue
         if key == "company" and looks_like_invalid_company_name(str(value)):
@@ -602,6 +638,18 @@ class CallSession:
         self.history.append({"role": "user", "content": text})
 
         normalized = " ".join(text.lower().strip(" .,!?:;").split())
+
+        # Explicit hostile/dismissive phrases mean the caller is ending the
+        # interaction, not describing a service problem.
+        if looks_like_abusive_dismissal(text):
+            self.final_status = "caller_ended"
+            await self.say("Rozumiem. Kończę rozmowę. Do widzenia.")
+            self.closed = True
+            try:
+                self.writer.close()
+            except Exception:
+                pass
+            return
 
         # Treat obvious attempts to alter the agent's rules as untrusted content.
         # They never reach field assignment, confirmation or the general LLM path.
