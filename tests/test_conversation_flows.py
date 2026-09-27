@@ -185,6 +185,21 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.ticket_data["contact"], "600100200")
         self.assertTrue(h.session.awaiting_problem)
 
+    async def test_goodbye_during_company_confirmation_ends_call(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Sąbeks", score=-0.85)
+        self.assertTrue(h.session.company_confirmation_pending)
+
+        await h.user("do widzenia", score=-0.30)
+
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
+        self.assertFalse(h.session.company_confirmation_pending)
+        self.assertEqual(h.saved, [])
+        self.assertTrue(any("do widzenia" in x.lower() for x in h.spoken))
+
     async def test_uncertain_company_rejected_and_reentered(self):
         h = ConversationHarness()
         await h.start()
