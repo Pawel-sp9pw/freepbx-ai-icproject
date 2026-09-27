@@ -80,6 +80,7 @@ class AdaptiveSTTTests(unittest.TestCase):
     def test_contact_retries_only_when_structurally_invalid(self):
         self.assertFalse(stt._needs_adaptive_retry("792032104", -0.1, "contact"))
         self.assertFalse(stt._needs_adaptive_retry("792032104", -0.8, "contact"))
+        self.assertFalse(stt._needs_adaptive_retry("siedem zero siedem jeden trzy siedem dwa osiem szesc", -0.4, "contact"))
         self.assertTrue(stt._needs_adaptive_retry("79203", -0.1, "contact"))
 
     def test_identical_second_candidate_keeps_first_score(self):
