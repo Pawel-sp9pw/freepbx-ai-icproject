@@ -90,8 +90,51 @@ def speak_phone(value: str):
 
 
 def extract_phone_digits(value: str):
+    """Accept Polish contact numbers only in unambiguous forms.
+
+    Valid: 9 digits, +48/48 + 9 digits, or 0048 + 9 digits.
+    Return the normalized 9-digit national number.
+    """
     digits = re.sub(r"\D", "", value or "")
-    return digits if 9 <= len(digits) <= 15 else ""
+    if len(digits) == 9:
+        return digits
+    if len(digits) == 11 and digits.startswith("48"):
+        return digits[2:]
+    if len(digits) == 13 and digits.startswith("0048"):
+        return digits[4:]
+    return ""
+
+
+def looks_like_invalid_company_name(value: str):
+    normalized = " ".join((value or "").lower().split())
+    if not normalized:
+        return True
+
+    bad_fragments = (
+        "amara.org",
+        "youtube.com",
+        "youtu.be",
+        "napisy stworzone",
+        "napisy wykonane",
+        "napisy przygotowane",
+        "transkrypcja",
+        "dziękuję za obejrzenie",
+        "dziekuje za obejrzenie",
+        "dziękuję za oglądanie",
+        "dziekuje za ogladanie",
+        "subskryb",
+    )
+    if any(fragment in normalized for fragment in bad_fragments):
+        return True
+
+    if "www." in normalized or "http://" in normalized or "https://" in normalized:
+        return True
+
+    # A transcript consisting only of a domain/address is not a company name.
+    if re.fullmatch(r"[a-z0-9.-]+\.(?:pl|com|eu|org|net)(?:\s+[a-z0-9.-]+\.(?:pl|com|eu|org|net))*", normalized):
+        return True
+
+    return False
 
 
 def looks_like_ticket_meta_request(text: str):
@@ -443,16 +486,10 @@ class CallSession:
             return "tak, nie"
 
         if self.awaiting_correction and self.correction_field == "company":
-            prompt = "pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja"
-            if customer_names:
-                prompt += ", " + customer_names
-            return prompt
+            return "Dzwoniący podaje nazwę swojej firmy po polsku."
 
         if self.awaiting_company:
-            prompt = "pizzeria, przychodnia, apteka, klinika, gabinet, firma, spółka, sklep, restauracja"
-            if customer_names:
-                prompt += ", " + customer_names
-            return prompt
+            return "Dzwoniący podaje nazwę swojej firmy po polsku."
 
         if self.awaiting_correction and self.correction_field == "contact":
             return "Numer telefonu. Cyfry od zera do dziewięciu."
@@ -650,6 +687,12 @@ class CallSession:
 
             if self.correction_field == "company":
                 company_text = company_without_phone(text) or text.strip()
+                if looks_like_invalid_company_name(company_text):
+                    await self.say(
+                        "Nie udało mi się wiarygodnie rozpoznać nazwy firmy. "
+                        "Proszę podać ją ponownie, możliwie krótko i wyraźnie."
+                    )
+                    return
                 matched_customer, _ = match_customer(company_text, "", self.customer_directory)
                 self.ticket_data["company"] = matched_customer["name"] if matched_customer else company_text
 
@@ -705,6 +748,13 @@ class CallSession:
         if self.awaiting_company:
             phone = extract_phone_digits(text)
             company_text = company_without_phone(text) or text.strip()
+
+            if looks_like_invalid_company_name(company_text):
+                await self.say(
+                    "Nie udało mi się wiarygodnie rozpoznać nazwy firmy. "
+                    "Proszę podać samą nazwę firmy jeszcze raz."
+                )
+                return
 
             looks_like_problem = any(
                 phrase in normalized
