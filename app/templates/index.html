@@ -240,8 +240,8 @@
         <textarea name="customer_directory" placeholder="Virtual World | 792032104&#10;Przychodnia Test | 600100200">{{s.customer_directory}}</textarea>
       </label>
       <div class="muted">
-        Jeden klient w wierszu: <code>Nazwa firmy | numer telefonu</code>. Agent użyje listy do dopasowania
-        rozpoznanej nazwy/numeru oraz jako dodatkowej podpowiedzi STT.
+        Jeden klient w wierszu: <code>Nazwa firmy | numer telefonu</code>. Agent użyje listy do bezpiecznego
+        dopasowania rozpoznanej nazwy i numeru. Lista nie jest dodawana do promptu Whispera podczas pytania o firmę.
       </div>
 
       <label>Token CallerID z FreePBX
