@@ -370,6 +370,21 @@ def transcribe_pcm16(
                 )
             first_text = ""
 
+        # Very short audio immediately after TTS often contains only residual
+        # prompt leakage / subtitle hallucinations. A second heavy decode of the
+        # same ~0.6 s fragment consistently produced another hallucination and
+        # only consumed CPU. Drop it and wait for the caller's real utterance.
+        if (
+            first_bad
+            and audio_seconds <= 0.80
+            and first_reason in ("prompt_leak", "known_whisper_hallucination", "repeated_trigram")
+        ):
+            meta["retry"] = False
+            meta["retry_reason"] = "short_rejected_audio"
+            meta["selected"] = ""
+            meta["selected_score"] = None
+            return meta if return_metadata else ""
+
         # Confirmation remains deliberately conservative. Never use a second
         # decoding pass to manufacture a clearer "tak" from ambiguous audio.
         if mode == "confirmation":
