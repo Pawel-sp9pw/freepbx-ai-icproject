@@ -27,8 +27,8 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertTrue(stt._needs_adaptive_retry("Fitzseria", -0.10, "company"))
         self.assertTrue(stt._needs_adaptive_retry("Pizzeria Roma", -0.10, "company"))
 
-    def test_long_company_does_not_force_retry(self):
-        self.assertFalse(
+    def test_company_always_uses_precision_retry(self):
+        self.assertTrue(
             stt._needs_adaptive_retry(
                 "Przychodnia Zdrowie Rodzinne Katowice",
                 -0.10,
@@ -36,9 +36,25 @@ class AdaptiveSTTTests(unittest.TestCase):
             )
         )
 
-    def test_problem_retries_only_when_confidence_is_low(self):
-        self.assertTrue(stt._needs_adaptive_retry("Nie działa recepta", -0.8, "problem"))
-        self.assertFalse(stt._needs_adaptive_retry("Nie działa recepta", -0.3, "problem"))
+    def test_problem_retries_for_short_or_low_confidence_text(self):
+        self.assertTrue(stt._needs_adaptive_retry("Nie działa recepta", -0.3, "problem"))
+        self.assertTrue(
+            stt._needs_adaptive_retry(
+                "Użytkownik nie może wystawić recepty w systemie od rana",
+                -0.8,
+                "problem",
+            )
+        )
+        self.assertFalse(
+            stt._needs_adaptive_retry(
+                "Użytkownik nie może wystawić recepty w systemie od rana",
+                -0.2,
+                "problem",
+            )
+        )
+
+    def test_contact_always_uses_precision_retry(self):
+        self.assertTrue(stt._needs_adaptive_retry("792032104", -0.1, "contact"))
 
     def test_better_second_candidate_is_selected(self):
         selected = stt._choose_candidate("Fitzseria", -0.55, "Pizzeria", -0.20)
@@ -66,9 +82,9 @@ class AdaptiveSTTTests(unittest.TestCase):
 
         self.assertEqual(text, "Pizzeria")
         self.assertEqual(len(model.calls), 2)
-        self.assertEqual(model.calls[0]["beam_size"], 5)
-        self.assertTrue(model.calls[0]["vad_filter"])
-        self.assertEqual(model.calls[1]["beam_size"], 8)
+        self.assertEqual(model.calls[0]["beam_size"], 7)
+        self.assertFalse(model.calls[0]["vad_filter"])
+        self.assertEqual(model.calls[1]["beam_size"], 10)
         self.assertFalse(model.calls[1]["vad_filter"])
 
     def test_low_confidence_problem_runs_second_pass_without_prompt(self):
@@ -89,8 +105,8 @@ class AdaptiveSTTTests(unittest.TestCase):
 
         self.assertEqual(text, "Nie działa recepta")
         self.assertEqual(len(model.calls), 2)
-        self.assertEqual(model.calls[0]["beam_size"], 5)
-        self.assertEqual(model.calls[1]["beam_size"], 8)
+        self.assertEqual(model.calls[0]["beam_size"], 7)
+        self.assertEqual(model.calls[1]["beam_size"], 10)
         self.assertIsNone(model.calls[1]["initial_prompt"])
 
     def test_phone_audio_is_resampled_to_16khz(self):
