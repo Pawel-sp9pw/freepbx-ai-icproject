@@ -198,6 +198,16 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertTrue(result["pass2"]["rejected"])
         self.assertIn("low_confidence", result["pass2"]["reason"])
 
+    def test_cpu_worker_pool_splits_threads_between_workers(self):
+        stt._models.clear()
+        with patch.object(stt, "WhisperModel") as model_cls, \
+             patch.object(stt.os, "cpu_count", return_value=8):
+            stt.get_model("medium", "cpu", "int8", 2)
+
+        kwargs = model_cls.call_args.kwargs
+        self.assertEqual(kwargs["num_workers"], 2)
+        self.assertEqual(kwargs["cpu_threads"], 4)
+
     def test_phone_audio_is_resampled_to_16khz(self):
         pcm = (b"\x01\x00" * 8000)
         out, rate = stt._prepare_phone_audio(pcm, 8000)
