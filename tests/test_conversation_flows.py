@@ -436,6 +436,50 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(h.session.confirmation_pending)
         self.assertEqual(h.saved, [])
 
+    async def test_common_dismissal_variants_end_without_ticket(self):
+        samples = [
+            "Spierdzielaj.",
+            "Odczep ode mnie.",
+            "Odpieprz się.",
+            "Daj mi spokój.",
+            "Zostaw mnie.",
+            "Nie będę z tobą rozmawiać.",
+            "Skończ już tę rozmowę.",
+            "Rozłącz się.",
+        ]
+
+        for sample in samples:
+            h = ConversationHarness()
+            h.session.ticket_data = {
+                "company": "Paweł",
+                "contact": "792032104",
+            }
+
+            await h.start()
+            await h.user(sample)
+
+            self.assertTrue(h.session.closed, sample)
+            self.assertEqual(h.session.final_status, "caller_ended", sample)
+            self.assertNotIn("description", h.session.ticket_data, sample)
+            self.assertEqual(h.saved, [], sample)
+
+    async def test_dismissal_words_with_real_problem_are_not_dropped(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Daj mi spokój, ale nie działa drukarka")
+
+        self.assertFalse(h.session.closed)
+        self.assertEqual(
+            h.session.ticket_data.get("description"),
+            "Daj mi spokój, ale nie działa drukarka",
+        )
+        self.assertTrue(h.session.confirmation_pending)
+
     async def test_profanity_with_real_problem_is_still_accepted(self):
         h = ConversationHarness()
         h.session.ticket_data = {
