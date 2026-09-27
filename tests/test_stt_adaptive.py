@@ -30,6 +30,8 @@ class AdaptiveSTTTests(unittest.TestCase):
             "napisy stworzone przez społeczność Amara.org",
             "Transkrypcja Jan Kowalski",
             "Dziękuję za obejrzenie",
+            "Dzięki za oglądanie.",
+            "Dzięki za obejrzenie.",
         ]
         for sample in samples:
             bad, reason = stt._looks_hallucinated(sample, 2.5)
@@ -145,6 +147,51 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertEqual(model.calls[0]["beam_size"], 5)
         self.assertEqual(model.calls[1]["beam_size"], 8)
         self.assertIsNone(model.calls[1]["initial_prompt"])
+
+    def test_rejected_prompt_leak_does_not_fall_back_to_very_weak_subtitle_hallucination(self):
+        model = FakeModel([
+            ("Dzwoniący opis problemu. " * 30, -0.10),
+            ("Dzięki za oglądanie.", -1.031),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 19200,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący opisuje problem techniczny lub usterkę po polsku.",
+                mode="problem",
+                return_metadata=True,
+            )
+
+        self.assertEqual(result["selected"], "")
+        self.assertTrue(result["pass1"]["rejected"])
+        self.assertTrue(result["pass2"]["rejected"])
+        self.assertTrue(result["retry"])
+        self.assertEqual(result["pass2"]["reason"], "known_whisper_hallucination")
+
+    def test_extremely_weak_problem_candidate_is_rejected_even_if_not_known_phrase(self):
+        model = FakeModel([
+            ("Losowy tekst bez sensu", -1.10),
+            ("Inny przypadkowy tekst", -1.02),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 16000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Opis problemu po polsku.",
+                mode="problem",
+                return_metadata=True,
+            )
+
+        self.assertEqual(result["selected"], "")
+        self.assertTrue(result["pass1"]["rejected"])
+        self.assertTrue(result["pass2"]["rejected"])
+        self.assertIn("low_confidence", result["pass2"]["reason"])
 
     def test_phone_audio_is_resampled_to_16khz(self):
         pcm = (b"\x01\x00" * 8000)
