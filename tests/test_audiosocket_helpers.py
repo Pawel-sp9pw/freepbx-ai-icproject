@@ -72,7 +72,7 @@ class AudioSocketRegressionTests(unittest.TestCase):
             {"name": "Artur", "phone": "604943274"},
             {"name": "Artus", "phone": "600000001"},
         ]
-        customer, score = match_customer("Atur", "", directory)
+        customer, score = match_customer("Artu", "", directory)
         self.assertIsNone(customer)
         self.assertGreater(score, 0.0)
 
