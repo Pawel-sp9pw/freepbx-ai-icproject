@@ -94,6 +94,25 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             "Nie działa wystawianie recept",
         )
 
+    async def test_company_prompt_is_sentence_not_keyword_list(self):
+        h = ConversationHarness()
+        await h.start()
+        prompt = h.session.stt_prompt_for_state()
+        self.assertEqual(prompt, "Dzwoniący podaje nazwę swojej firmy po polsku.")
+        self.assertNotIn("pizzeria, przychodnia", prompt.lower())
+
+    async def test_whisper_url_hallucination_is_not_accepted_as_company(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("www.youtube.com www.youtube.com")
+
+        self.assertTrue(h.session.awaiting_company)
+        self.assertNotIn("company", h.session.ticket_data)
+        self.assertTrue(
+            any("nazwę firmy" in x.lower() or "nazwe firmy" in x.lower() for x in h.spoken)
+        )
+
     async def test_unknown_caller_collects_company_contact_problem_and_confirms(self):
         h = ConversationHarness()
 
@@ -118,6 +137,31 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             h.saved[0]["ticket"]["description"],
             "Nie działa drukarka fiskalna",
+        )
+
+    async def test_invalid_11_digit_contact_is_rejected(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company": "Alfatest"}
+
+        await h.start()
+        self.assertTrue(h.session.awaiting_contact)
+
+        async def fallback(expected, text):
+            return {
+                "intent": "unknown",
+                "company": "",
+                "contact": "",
+                "description": "",
+                "blocked": False,
+            }
+        h.session.interpret_fallback = fallback
+
+        await h.user("59931312120")
+
+        self.assertTrue(h.session.awaiting_contact)
+        self.assertNotIn("contact", h.session.ticket_data)
+        self.assertTrue(
+            any("cyfra po cyfrze" in x.lower() for x in h.spoken)
         )
 
     async def test_company_correction_replaces_only_company(self):
