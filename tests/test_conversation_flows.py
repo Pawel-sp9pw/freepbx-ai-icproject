@@ -480,6 +480,22 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(h.session.confirmation_pending)
 
+    async def test_spieprzaj_dziadu_ends_call_without_ticket(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Spieprzaj dziadu!")
+
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
+        self.assertNotIn("description", h.session.ticket_data)
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertEqual(h.saved, [])
+
     async def test_profanity_with_real_problem_is_still_accepted(self):
         h = ConversationHarness()
         h.session.ticket_data = {
