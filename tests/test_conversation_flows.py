@@ -403,6 +403,40 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             any("tylko tak albo nie" in x.lower() for x in h.spoken)
         )
 
+    async def test_human_handoff_request_is_not_saved_as_problem(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Chcę porozmawiać z człowiekiem.")
+
+        self.assertTrue(h.session.awaiting_problem)
+        self.assertNotIn("description", h.session.ticket_data)
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertEqual(h.saved, [])
+        self.assertTrue(
+            any("proszę opisać problem" in x.lower() for x in h.spoken)
+        )
+
+    async def test_handoff_word_with_real_problem_is_still_accepted(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Chcę porozmawiać z człowiekiem, bo nie działa drukarka")
+
+        self.assertEqual(
+            h.session.ticket_data.get("description"),
+            "Chcę porozmawiać z człowiekiem, bo nie działa drukarka",
+        )
+        self.assertTrue(h.session.confirmation_pending)
+
     async def test_ticket_meta_request_is_not_saved_as_problem(self):
         h = ConversationHarness()
         h.session.ticket_data = {
