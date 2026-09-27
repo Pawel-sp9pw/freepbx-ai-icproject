@@ -240,6 +240,12 @@
           <div class="muted">Niższa wartość = mniej pytań. Domyślnie -0.55.</div>
         </div>
         <div>
+          <label>Automatyczne przyjęcie opisu problemu
+            <input type="number" step="0.05" min="-2" max="0" name="problem_auto_accept_logprob" value="{{s.problem_auto_accept_logprob}}">
+          </label>
+          <div class="muted">Jeśli confidence opisu jest co najmniej tak dobre, agent zapisze zgłoszenie bez odczytywania podsumowania. Domyślnie -0.30.</div>
+        </div>
+        <div>
           <label>Walidacja numeru telefonu
             <select name="phone_validation_mode">
               <option value="pl" {% if s.phone_validation_mode=='pl' %}selected{% endif %}>Polska — 9 cyfr / +48 / 0048</option>
