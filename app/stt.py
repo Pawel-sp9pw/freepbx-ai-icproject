@@ -29,6 +29,10 @@ KNOWN_WHISPER_HALLUCINATIONS = (
     "dziekuje za obejrzenie",
     "dziękuję za oglądanie",
     "dziekuje za ogladanie",
+    "dzięki za oglądanie",
+    "dzieki za ogladanie",
+    "dzięki za obejrzenie",
+    "dzieki za obejrzenie",
     "subskryb",
     "youtube.com",
     "youtu.be",
@@ -55,6 +59,29 @@ def get_model(name: str, device: str, compute_type: str):
             cpu_threads if device == "cpu" else "n/a",
         )
     return _models[key]
+
+
+def _confidence_floor_reason(score, mode: str):
+    """Reject extremely weak non-confirmation candidates.
+
+    Adaptive retry is allowed to work in the normal low-confidence range, but
+    candidates below this floor are too unreliable to become ticket data.
+    """
+    if score is None or mode == "confirmation":
+        return ""
+    thresholds = {
+        "company": -0.95,
+        "problem": -0.95,
+        "contact": -1.05,
+        "normal": -1.05,
+    }
+    floor = thresholds.get(mode, -1.05)
+    try:
+        if float(score) < floor:
+            return f"low_confidence:{float(score):.3f}<{floor:.2f}"
+    except Exception:
+        return ""
+    return ""
 
 
 def _looks_hallucinated(text: str, audio_seconds: float):
@@ -310,6 +337,10 @@ def transcribe_pcm16(
             patience=1.10,
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
+        if not first_bad:
+            confidence_reason = _confidence_floor_reason(first_score, mode)
+            if confidence_reason:
+                first_bad, first_reason = True, confidence_reason
         meta["pass1"] = {
             "text": first_text,
             "score": first_score,
@@ -357,6 +388,10 @@ def transcribe_pcm16(
                 patience=1.30,
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
+            if not second_bad:
+                confidence_reason = _confidence_floor_reason(second_score, mode)
+                if confidence_reason:
+                    second_bad, second_reason = True, confidence_reason
             meta["pass2"] = {
                 "text": second_text,
                 "score": second_score,
