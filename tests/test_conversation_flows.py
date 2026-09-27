@@ -39,6 +39,7 @@ class ConversationHarness:
             "stt_prompt": "",
             "stt_problem_hint": "Problem może dotyczyć e-recepty, P1, NFZ, faktur i drukarki fiskalnej.",
             "company_confirm_logprob": -0.55,
+            "problem_auto_accept_logprob": -0.30,
             "phone_validation_mode": "pl",
             "max_turns": 12,
             "silence_ms": 900,
@@ -129,6 +130,40 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             h.saved[0]["ticket"]["description"],
             "Nie działa wystawianie recept",
         )
+
+    async def test_high_confidence_problem_is_saved_without_readback(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Nie działa wystawianie recept", score=-0.20)
+
+        self.assertEqual(len(h.saved), 1)
+        self.assertFalse(h.saved[0]["uncertain"])
+        self.assertTrue(h.session.closed)
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertFalse(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
+        self.assertEqual(
+            h.saved[0]["ticket"]["description"],
+            "Nie działa wystawianie recept",
+        )
+
+    async def test_medium_confidence_problem_still_requires_confirmation(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Sanery kodów przy kasie przestało reagować", score=-0.379)
+
+        self.assertEqual(h.saved, [])
+        self.assertTrue(h.session.confirmation_pending)
+        self.assertTrue(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
 
     async def test_company_prompt_is_sentence_not_keyword_list(self):
         h = ConversationHarness()
