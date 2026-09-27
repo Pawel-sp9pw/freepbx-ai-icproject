@@ -528,6 +528,48 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             any("tylko tak albo nie" in x.lower() for x in h.spoken)
         )
 
+    async def test_explicit_ticket_cancellation_does_not_save(self):
+        samples = [
+            "Właściwie to już zaczęło działać. Proszę nie zakładać zgłoszenia.",
+            "Właściwie to już zaczęło działać. Proszę o nie zakładać zgłoszenia.",
+            "Anuluj zgłoszenie.",
+            "Rezygnuję ze zgłoszenia.",
+        ]
+
+        for sample in samples:
+            h = ConversationHarness()
+            h.session.ticket_data = {
+                "company": "Marcin",
+                "contact": "608411319",
+            }
+            await h.start()
+            await h.user(sample, score=-0.17)
+
+            self.assertEqual(h.saved, [], sample)
+            self.assertTrue(h.session.closed, sample)
+            self.assertEqual(h.session.final_status, "caller_cancelled", sample)
+            self.assertFalse(h.session.confirmation_pending, sample)
+            self.assertTrue(
+                any("nie będę zakładać zgłoszenia" in x.lower() for x in h.spoken),
+                sample,
+            )
+
+    async def test_cancellation_during_confirmation_does_not_save(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+        await h.start()
+        await h.user("Nie działa drukarka", score=-0.40)
+        self.assertTrue(h.session.confirmation_pending)
+
+        await h.user("Nie zakładaj zgłoszenia", score=-0.20)
+
+        self.assertEqual(h.saved, [])
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_cancelled")
+
     async def test_abusive_dismissal_ends_call_without_ticket(self):
         h = ConversationHarness()
         h.session.ticket_data = {
