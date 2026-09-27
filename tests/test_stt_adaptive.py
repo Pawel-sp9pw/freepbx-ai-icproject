@@ -32,15 +32,20 @@ class AdaptiveSTTTests(unittest.TestCase):
             "Dziękuję za obejrzenie",
             "Dzięki za oglądanie.",
             "Dzięki za obejrzenie.",
+            "Dzwoniący podaje nazwę swojej firmy po polsku.",
         ]
         for sample in samples:
             bad, reason = stt._looks_hallucinated(sample, 2.5)
             self.assertTrue(bad, sample)
             self.assertTrue(reason)
 
-    def test_short_company_requests_retry(self):
-        self.assertTrue(stt._needs_adaptive_retry("Fitzseria", -0.10, "company"))
-        self.assertTrue(stt._needs_adaptive_retry("Pizzeria Roma", -0.10, "company"))
+    def test_confident_short_company_skips_retry(self):
+        self.assertFalse(stt._needs_adaptive_retry("Paweł", -0.49, "company"))
+        self.assertFalse(stt._needs_adaptive_retry("Pizzeria Roma", -0.30, "company"))
+
+    def test_uncertain_short_company_still_retries(self):
+        self.assertTrue(stt._needs_adaptive_retry("Sąbeks", -0.88, "company"))
+        self.assertTrue(stt._needs_adaptive_retry("Artur", -0.70, "company"))
 
     def test_long_confident_company_skips_retry(self):
         self.assertFalse(
