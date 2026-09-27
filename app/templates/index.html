@@ -176,6 +176,11 @@
           <button type="button" class="test" onclick="applyPerformanceProfile('balanced')">Ustaw zbalansowany</button>
         </div>
         <div class="status-box">
+          <strong>Dokładny — Whisper medium</strong>
+          <div class="muted">Qwen3 1.7B + Whisper medium / int8 — lepsza jakość STT, większe opóźnienie na 4 vCPU</div>
+          <button type="button" class="test" onclick="applyPerformanceProfile('accurate')">Ustaw dokładny</button>
+        </div>
+        <div class="status-box">
           <strong>Bardzo szybki — eksperymentalny</strong>
           <div class="muted">Qwen3 0.6B + Whisper tiny / int8 — mocno obniżona jakość polskiej mowy i odpowiedzi</div>
           <button type="button" class="test" onclick="applyPerformanceProfile('very_fast')">Ustaw bardzo szybki</button>
