@@ -272,6 +272,7 @@ class CallSession:
         self.company_confirmation_pending = False
         self.company_candidate = ""
         self.company_candidate_score = None
+        self.company_confirmation_context = ""
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -456,7 +457,7 @@ class CallSession:
                 self.speech.extend(frame)
                 self.silence_frames += 1
                 silence_ms = self.silence_frames * 20
-                silence_target_ms = 350 if self.confirmation_pending else int(self.settings.get("silence_ms", 900))
+                silence_target_ms = 350 if (self.confirmation_pending or self.company_confirmation_pending) else int(self.settings.get("silence_ms", 900))
                 if silence_ms >= silence_target_ms:
                     pcm = bytes(self.speech)
                     self.speech.clear()
@@ -586,11 +587,25 @@ class CallSession:
 
             if matches_confirmation_phrase(normalized, yes_phrases):
                 self.ticket_data["company"] = self.company_candidate
+                context = self.company_confirmation_context
                 self.company_confirmation_pending = False
                 self.company_candidate = ""
                 self.company_candidate_score = None
-                self.awaiting_company = False
+                self.company_confirmation_context = ""
 
+                if context == "correction":
+                    self.awaiting_correction = False
+                    self.correction_field = ""
+                    self.correction_attempts += 1
+                    if self.correction_attempts >= 3:
+                        await self.finalize_ticket(uncertain=True)
+                        return
+                    self.confirmation_pending = True
+                    self.confirmation_misses = 0
+                    await self.say_confirmation_summary()
+                    return
+
+                self.awaiting_company = False
                 if self.ticket_data.get("contact"):
                     self.awaiting_problem = True
                     await self.say("Dziękuję. Proszę opisać problem.")
@@ -600,11 +615,18 @@ class CallSession:
                 return
 
             if matches_confirmation_phrase(normalized, no_phrases):
+                context = self.company_confirmation_context
                 self.company_confirmation_pending = False
                 self.company_candidate = ""
                 self.company_candidate_score = None
-                self.awaiting_company = True
-                await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
+                self.company_confirmation_context = ""
+                if context == "correction":
+                    self.awaiting_correction = True
+                    self.correction_field = "company"
+                    await self.say("Dobrze. Proszę podać poprawną nazwę firmy jeszcze raz.")
+                else:
+                    self.awaiting_company = True
+                    await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
                 return
 
             await self.say(
@@ -754,7 +776,25 @@ class CallSession:
                     )
                     return
                 matched_customer, _ = match_customer(company_text, "", self.customer_directory)
-                self.ticket_data["company"] = matched_customer["name"] if matched_customer else company_text
+                if matched_customer:
+                    self.ticket_data["company"] = matched_customer["name"]
+                else:
+                    confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
+                    low_confidence = (
+                        selected_score is not None
+                        and float(selected_score) < confirm_threshold
+                    )
+                    if low_confidence:
+                        self.company_confirmation_pending = True
+                        self.company_candidate = company_text
+                        self.company_candidate_score = float(selected_score)
+                        self.company_confirmation_context = "correction"
+                        await self.say(
+                            f"Czy dobrze zrozumiałem poprawioną nazwę: {company_text}? "
+                            "Proszę powiedzieć tak albo nie."
+                        )
+                        return
+                    self.ticket_data["company"] = company_text
 
             elif self.correction_field == "contact":
                 phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
@@ -828,7 +868,10 @@ class CallSession:
                 if interpreted.get("company"):
                     company_text = str(interpreted["company"]).strip()
                 if interpreted.get("contact") and not phone:
-                    phone = extract_phone_digits(str(interpreted["contact"]))
+                    phone = extract_phone_digits(
+                        str(interpreted["contact"]),
+                        self.settings.get("phone_validation_mode", "pl"),
+                    )
                 if interpreted.get("description"):
                     self.ticket_data["description"] = str(interpreted["description"]).strip()
 
@@ -851,6 +894,7 @@ class CallSession:
                     self.company_confirmation_pending = True
                     self.company_candidate = company_text
                     self.company_candidate_score = float(selected_score)
+                    self.company_confirmation_context = "initial"
                     self.awaiting_company = False
                     await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
                     return
