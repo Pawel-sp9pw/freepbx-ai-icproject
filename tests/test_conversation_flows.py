@@ -250,6 +250,61 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.ticket_data["company"], "Beta Med")
         self.assertTrue(h.session.awaiting_contact)
 
+    async def test_company_and_problem_in_one_utterance_are_not_asked_twice(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"contact": "790205140"}
+
+        async def fallback(expected, text):
+            return {
+                "intent": "problem",
+                "company": "Tomek",
+                "contact": "",
+                "description": "Nie działa nam poczta",
+                "blocked": False,
+            }
+
+        h.session.interpret_fallback = fallback
+
+        await h.start()
+        self.assertTrue(h.session.awaiting_company)
+
+        await h.user("Dzień dobry, tu Tomek. Nie działa nam poczta.", score=-0.237)
+
+        self.assertEqual(len(h.saved), 1)
+        self.assertEqual(h.saved[0]["ticket"]["company"], "Tomek")
+        self.assertEqual(h.saved[0]["ticket"]["contact"], "790205140")
+        self.assertEqual(h.saved[0]["ticket"]["description"], "Nie działa nam poczta")
+        self.assertFalse(any("proszę opisać problem" in x.lower() for x in h.spoken[1:]))
+
+    async def test_early_problem_is_kept_while_agent_collects_missing_phone(self):
+        h = ConversationHarness()
+
+        async def fallback(expected, text):
+            return {
+                "intent": "problem",
+                "company": "Tomek",
+                "contact": "",
+                "description": "Nie działa nam poczta",
+                "blocked": False,
+            }
+
+        h.session.interpret_fallback = fallback
+
+        await h.start()
+        await h.user("Dzień dobry, tu Tomek. Nie działa nam poczta.", score=-0.237)
+
+        self.assertEqual(h.session.ticket_data["company"], "Tomek")
+        self.assertEqual(h.session.ticket_data["description"], "Nie działa nam poczta")
+        self.assertTrue(h.session.awaiting_contact)
+        self.assertFalse(h.session.awaiting_problem)
+
+        await h.user("790 205 140", score=-0.20)
+
+        self.assertEqual(len(h.saved), 1)
+        self.assertEqual(h.saved[0]["ticket"]["contact"], "790205140")
+        self.assertEqual(h.saved[0]["ticket"]["description"], "Nie działa nam poczta")
+        self.assertFalse(any("proszę opisać problem" in x.lower() for x in h.spoken[1:]))
+
     async def test_unknown_caller_collects_company_contact_problem_and_confirms(self):
         h = ConversationHarness()
 
