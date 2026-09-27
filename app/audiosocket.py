@@ -162,15 +162,30 @@ def looks_like_abusive_dismissal(text: str):
         return False
 
     patterns = (
-        r"\bspier(?:dal|dol)aj\b",
+        # Common profanity variants and typical Polish STT confusions.
+        r"\bspier(?:dal|dol|dziel)aj\b",
+        r"\bspier(?:dal|dol|dziel)\s+si[ęe]\b",
         r"\bspadaj\b",
+        r"\bspad[aą]j\b",
         r"\bodczep\s+si[ęe]\b",
+        r"\bodczep\s+ode\s+mnie\b",
         r"\bodwal\s+si[ęe]\b",
-        r"\bodp(?:ieprz|ierdol)\s+si[ęe]\b",
+        r"\bodwal\s+ode\s+mnie\b",
+        r"\bodp(?:ieprz|ierdol|iepsz)\s+si[ęe]\b",
+        r"\bodp(?:ieprz|ierdol|iepsz)\s+ode\s+mnie\b",
+        r"\bpieprz\s+si[ęe]\b",
+        r"\bwal\s+si[ęe]\b",
+        r"\bwon\b",
         r"\bdaj\s+(mi\s+)?spok[oó]j\b",
-        r"\bnie\s+chc[ęe]\s+(z\s+tob[aą]\s+)?rozmawia[ćc]\b",
+        r"\bzostaw\s+mnie\b",
+        r"\bnie\s+chc[ęe]\s+(ju[żz]\s+)?(z\s+tob[aą]\s+)?rozmawia[ćc]\b",
+        r"\bnie\s+b[ęe]d[ęe]\s+(z\s+tob[aą]\s+)?rozmawia[ćc]\b",
         r"\bnie\s+dzwo[ńn]\b",
+        r"\bprosz[ęe]\s+nie\s+dzwo[ńn]\b",
         r"\bko[ńn]cz\b",
+        r"\bsko[ńn]cz\s+(ju[żz]\s+)?(t[ęe]\s+)?rozmow[ęe]\b",
+        r"\broz[łl][ąa]cz\s+si[ęe]\b",
+        r"\broz[łl][ąa]cz\b",
     )
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
 
