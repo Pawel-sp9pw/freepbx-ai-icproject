@@ -140,6 +140,33 @@ def looks_like_invalid_company_name(value: str):
     return False
 
 
+def looks_like_human_handoff_request(text: str):
+    """Detect requests to speak with a human instead of a service problem."""
+    normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
+    if not normalized:
+        return False
+
+    # If the same utterance also contains a concrete fault/symptom, keep the
+    # technical content as a valid problem description.
+    problem_signals = (
+        "nie działa", "nie dziala", "nie mogę", "nie moge", "nie można", "nie mozna",
+        "błąd", "blad", "awaria", "usterka", "problem z", "brak ", "wyskakuje",
+        "zawiesza", "rozłącza", "rozlacza", "nie otwiera", "nie drukuje",
+        "nie loguje", "nie zapisuje", "nie wysyła", "nie wysyla", "przestał",
+        "przestal", "zepsuł", "zepsul",
+    )
+    if any(signal in normalized for signal in problem_signals):
+        return False
+
+    patterns = (
+        r"\b(chc[ęe]|chcia[łl]bym|prosz[ęe])\b.*\b(porozmawia[ćc]|rozmawia[ćc])\b.*\b(cz[łl]owiek|konsultant|operator|serwisant|pracownik)",
+        r"\b(po[łl][ąa]cz|prze[łl][ąa]cz|przekieruj)\b.*\b(cz[łl]owiek|konsultant|operator|serwis|serwisant|pracownik)",
+        r"\b(chc[ęe]|poprosz[ęe])\b.*\b(cz[łl]owieka|konsultanta|operatora|serwisanta|pracownika)",
+        r"\b(cz[łl]owiek|konsultant|operator|serwisant)\b",
+    )
+    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+
+
 def looks_like_ticket_meta_request(text: str):
     """Return True when the caller talks about creating/routing the ticket
     instead of describing the actual service problem.
@@ -189,7 +216,10 @@ def apply_llm_fill_only(ticket_data: dict, ticket_update: dict):
             continue
         if value in (None, "", [], {}):
             continue
-        if key == "description" and looks_like_ticket_meta_request(str(value)):
+        if key == "description" and (
+            looks_like_ticket_meta_request(str(value))
+            or looks_like_human_handoff_request(str(value))
+        ):
             continue
         if key == "company" and looks_like_invalid_company_name(str(value)):
             continue
@@ -845,6 +875,12 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
 
             elif self.correction_field == "description":
+                if looks_like_human_handoff_request(text):
+                    await self.say(
+                        "Mogę przyjąć zgłoszenie dla serwisu. "
+                        "Proszę opisać problem lub usterkę, a zgłoszenie przekażę do obsługi."
+                    )
+                    return
                 if looks_like_ticket_meta_request(text):
                     await self.say(
                         "To brzmi jak polecenie dotyczące zgłoszenia. "
@@ -982,6 +1018,13 @@ class CallSession:
         # Explicit conversation state beats LLM inference. If we just asked
         # for the problem, accept the next non-empty utterance as description.
         if self.awaiting_problem and not self.ticket_data.get("description"):
+            if looks_like_human_handoff_request(text):
+                await self.say(
+                    "Mogę przyjąć zgłoszenie dla serwisu. "
+                    "Proszę opisać problem lub usterkę, a zgłoszenie przekażę do obsługi."
+                )
+                return
+
             if looks_like_ticket_meta_request(text):
                 await self.say(
                     "Oczywiście mogę zarejestrować zgłoszenie. "
