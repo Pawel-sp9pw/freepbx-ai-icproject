@@ -287,6 +287,47 @@ def company_without_phone(value: str):
     return cleaned.strip()
 
 
+def extract_problem_fragment(text: str):
+    """Extract an explicit technical-problem fragment from a mixed utterance.
+
+    Used when the caller gives company/name and problem in the same sentence,
+    before the state machine formally asks for the problem. This is deliberately
+    conservative: it only triggers on concrete fault/symptom phrases.
+    """
+    source = " ".join((text or "").strip().split())
+    if not source:
+        return ""
+
+    signals = (
+        "nie działa", "nie dziala", "nie mogę", "nie moge", "nie można", "nie mozna",
+        "błąd", "blad", "awaria", "usterka", "problem z", "brak ", "wyskakuje",
+        "zawiesza", "rozłącza", "rozlacza", "wolno działa", "wolno dziala",
+        "nie otwiera", "nie drukuje", "nie loguje", "nie zapisuje", "nie wysyła",
+        "nie wysyla", "przestał", "przestal", "zepsuł", "zepsul",
+    )
+    lower = source.lower()
+    positions = [lower.find(signal) for signal in signals if lower.find(signal) >= 0]
+    if not positions:
+        return ""
+
+    start = min(positions)
+
+    # Prefer the whole sentence containing the first explicit symptom.
+    sentence_start = max(
+        source.rfind(".", 0, start),
+        source.rfind("!", 0, start),
+        source.rfind("?", 0, start),
+        source.rfind(";", 0, start),
+    )
+    if sentence_start >= 0:
+        start = sentence_start + 1
+
+    fragment = source[start:].strip(" ,.;:-")
+    if len(fragment) < 3:
+        return ""
+    return fragment
+
+
 def match_customer(company: str, contact: str, directory: list):
     contact_digits = re.sub(r"\D", "", contact or "")
     # Phone match is strongest and can repair a badly recognized company name.
@@ -1055,6 +1096,11 @@ class CallSession:
                 for phrase in ("problem", "nie działa", "nie dziala", "awaria", "błąd", "blad", "usterka", "nie mogę", "nie moge")
             )
             if looks_like_problem:
+                deterministic_problem = extract_problem_fragment(text)
+                if deterministic_problem and not self.ticket_data.get("description"):
+                    self.ticket_data["description"] = deterministic_problem
+                    self.early_problem_score = selected_score
+
                 interpreted = await self.interpret_fallback("nazwa firmy", text)
                 if interpreted.get("blocked"):
                     await self.refuse_out_of_scope()
@@ -1066,7 +1112,7 @@ class CallSession:
                         str(interpreted["contact"]),
                         self.settings.get("phone_validation_mode", "pl"),
                     )
-                if interpreted.get("description"):
+                if interpreted.get("description") and not self.ticket_data.get("description"):
                     self.ticket_data["description"] = str(interpreted["description"]).strip()
                     self.early_problem_score = selected_score
 
