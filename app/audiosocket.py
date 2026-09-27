@@ -162,7 +162,7 @@ def looks_like_abusive_dismissal(text: str):
         return False
 
     patterns = (
-        r"\bspierdalaj\b",
+        r"\bspier(?:dal|dol)aj\b",
         r"\bspadaj\b",
         r"\bodczep\s+si[ęe]\b",
         r"\bodwal\s+si[ęe]\b",
