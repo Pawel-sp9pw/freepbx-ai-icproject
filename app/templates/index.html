@@ -22,6 +22,10 @@
     .call-details-row td{background:#fafbfc;padding:0 12px 14px 12px;border-bottom:1px solid #d8dce2}
     .call-details-inline{padding:12px 4px 2px 4px}
     .call-row-expanded td{background:#f7f9fc}
+    .call-month-row td{background:#e9edf3;font-weight:700;border-top:2px solid #d7dce4}
+    .call-day-row td{background:#f3f5f8;font-weight:600}
+    .call-group-button{background:transparent;padding:5px 0;margin:0;font-weight:inherit;text-align:left}
+    .call-group-count{font-weight:400;color:#666;margin-left:8px}
     .msg{padding:8px 10px;margin:7px 0;border-radius:8px;background:#f3f4f6;white-space:pre-wrap}
     .msg.user{background:#eef4ff}.msg.assistant{background:#eef9ee}
     @media(max-width:700px){.grid{grid-template-columns:1fr} table{font-size:.82em}}
@@ -508,6 +512,9 @@ PersistentKeepalive = 25"></textarea>
   let expandedCallId=null;
   let expandedCallIsActive=false;
   const callDetailsCache={};
+  const expandedCallMonths=new Set();
+  const expandedCallDays=new Set();
+  let callGroupsInitialized=false;
   let callsRefreshBusy=false;
   let callDetailsRefreshBusy=false;
 
@@ -547,6 +554,58 @@ PersistentKeepalive = 25"></textarea>
     }
   }
 
+  function callLocalDayKey(value){
+    const d=new Date(value);
+    if(Number.isNaN(d.getTime())) return 'unknown';
+    const y=d.getFullYear();
+    const m=String(d.getMonth()+1).padStart(2,'0');
+    const day=String(d.getDate()).padStart(2,'0');
+    return y+'-'+m+'-'+day;
+  }
+
+  function callLocalMonthKey(value){
+    const d=new Date(value);
+    if(Number.isNaN(d.getTime())) return 'unknown';
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  }
+
+  function todayCallDayKey(){
+    return callLocalDayKey(new Date());
+  }
+
+  function formatCallMonth(value){
+    const d=new Date(value);
+    if(Number.isNaN(d.getTime())) return 'Nieznany miesiąc';
+    return d.toLocaleDateString('pl-PL',{year:'numeric',month:'long'});
+  }
+
+  function formatCallDay(value){
+    const d=new Date(value);
+    if(Number.isNaN(d.getTime())) return 'Nieznany dzień';
+    const today=todayCallDayKey();
+    const key=callLocalDayKey(d);
+    if(key===today) return 'Dzisiaj · '+d.toLocaleDateString('pl-PL');
+    return d.toLocaleDateString('pl-PL',{weekday:'long',year:'numeric',month:'2-digit',day:'2-digit'});
+  }
+
+  function toggleCallMonth(key){
+    if(expandedCallMonths.has(key)){
+      expandedCallMonths.delete(key);
+    }else{
+      expandedCallMonths.add(key);
+    }
+    refreshCalls();
+  }
+
+  function toggleCallDay(key){
+    if(expandedCallDays.has(key)){
+      expandedCallDays.delete(key);
+    }else{
+      expandedCallDays.add(key);
+    }
+    refreshCalls();
+  }
+
   async function toggleCall(callId){
     if(expandedCallId===callId){
       expandedCallId=null;
@@ -564,7 +623,7 @@ PersistentKeepalive = 25"></textarea>
     callsRefreshBusy=true;
     const body=document.getElementById('callsTable');
     try{
-      const r=await fetch('/api/calls?limit=30',{cache:'no-store'});
+      const r=await fetch('/api/calls?limit=200',{cache:'no-store'});
       const j=await r.json();
       const items=j.items || [];
       if(!items.length){
@@ -573,35 +632,88 @@ PersistentKeepalive = 25"></textarea>
         return;
       }
 
-      let html='';
-      for(const c of items){
-        const expanded=expandedCallId===c.call_id;
-        if(expanded){
-          const status=String(c.status || '').toLowerCase();
-          expandedCallIsActive=(status==='active' || status==='running' || status==='in_progress' || status==='in-progress');
-        }
-        html+=
-          '<tr class="'+(expanded?'call-row-expanded':'')+'">'+
-          '<td>'+esc(formatDate(c.started_at))+'</td>'+
-          '<td>'+esc(c.peer_ip || '—')+'</td>'+
-          '<td>'+esc(c.status || '—')+'</td>'+
-          '<td>'+esc(formatDuration(c.duration_seconds))+'</td>'+
-          '<td>'+esc(c.message_count ?? 0)+'</td>'+
-          '<td>'+esc(c.ticket_ref || '—')+'</td>'+
-          '<td><button type="button" class="test" onclick="toggleCall(\''+esc(c.call_id)+'\')">'+
-          (expanded?'Zwiń':'Podgląd')+'</button></td>'+
-          '</tr>';
+      const todayKey=todayCallDayKey();
+      const todayMonth=todayKey.slice(0,7);
 
-        if(expanded){
-          const cached=callDetailsCache[c.call_id] || '<span class="muted">Ładowanie rozmowy...</span>';
-          html+='<tr class="call-details-row"><td colspan="7">'+
-            '<div id="callDetails-'+esc(c.call_id)+'">'+cached+'</div>'+
+      if(!callGroupsInitialized){
+        expandedCallMonths.add(todayMonth);
+        expandedCallDays.add(todayKey);
+        callGroupsInitialized=true;
+      }
+
+      const months=new Map();
+      for(const c of items){
+        const monthKey=callLocalMonthKey(c.started_at);
+        const dayKey=callLocalDayKey(c.started_at);
+        if(!months.has(monthKey)){
+          months.set(monthKey,{sample:c.started_at,days:new Map(),count:0});
+        }
+        const month=months.get(monthKey);
+        month.count++;
+        if(!month.days.has(dayKey)){
+          month.days.set(dayKey,{sample:c.started_at,items:[]});
+        }
+        month.days.get(dayKey).items.push(c);
+      }
+
+      let html='';
+      let expandedVisible=false;
+
+      for(const [monthKey,month] of months){
+        const monthOpen=expandedCallMonths.has(monthKey);
+        html+=
+          '<tr class="call-month-row"><td colspan="7">'+
+          '<button type="button" class="call-group-button" onclick="toggleCallMonth(\''+esc(monthKey)+'\')">'+
+          (monthOpen?'▼ ':'▶ ')+esc(formatCallMonth(month.sample))+
+          '<span class="call-group-count">('+month.count+' rozm.)</span></button>'+
+          '</td></tr>';
+
+        if(!monthOpen) continue;
+
+        for(const [dayKey,day] of month.days){
+          const dayOpen=expandedCallDays.has(dayKey);
+          html+=
+            '<tr class="call-day-row"><td colspan="7">'+
+            '<button type="button" class="call-group-button" onclick="toggleCallDay(\''+esc(dayKey)+'\')">'+
+            (dayOpen?'▼ ':'▶ ')+esc(formatCallDay(day.sample))+
+            '<span class="call-group-count">('+day.items.length+' rozm.)</span></button>'+
             '</td></tr>';
+
+          if(!dayOpen) continue;
+
+          for(const c of day.items){
+            const expanded=expandedCallId===c.call_id;
+            if(expanded){
+              expandedVisible=true;
+              const status=String(c.status || '').toLowerCase();
+              expandedCallIsActive=(status==='active' || status==='running' || status==='in_progress' || status==='in-progress');
+            }
+
+            html+=
+              '<tr class="'+(expanded?'call-row-expanded':'')+'">'+
+              '<td>'+esc(formatDate(c.started_at))+'</td>'+
+              '<td>'+esc(c.peer_ip || '—')+'</td>'+
+              '<td>'+esc(c.status || '—')+'</td>'+
+              '<td>'+esc(formatDuration(c.duration_seconds))+'</td>'+
+              '<td>'+esc(c.message_count ?? 0)+'</td>'+
+              '<td>'+esc(c.ticket_ref || '—')+'</td>'+
+              '<td><button type="button" class="test" onclick="toggleCall(\''+esc(c.call_id)+'\')">'+
+              (expanded?'Zwiń':'Podgląd')+'</button></td>'+
+              '</tr>';
+
+            if(expanded){
+              const cached=callDetailsCache[c.call_id] || '<span class="muted">Ładowanie rozmowy...</span>';
+              html+='<tr class="call-details-row"><td colspan="7">'+
+                '<div id="callDetails-'+esc(c.call_id)+'">'+cached+'</div>'+
+                '</td></tr>';
+            }
+          }
         }
       }
+
       body.innerHTML=html;
 
-      if(expandedCallId){
+      if(expandedCallId && expandedVisible){
         const needsInitialLoad=!callDetailsCache[expandedCallId];
         if(expandedCallIsActive || needsInitialLoad){
           await loadInlineCallDetails(expandedCallId);
