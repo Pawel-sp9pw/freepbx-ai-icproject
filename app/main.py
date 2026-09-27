@@ -251,6 +251,12 @@ async def performance_profile(profile: str = Form(...)):
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
         },
+        "accurate": {
+            "ollama_model": "qwen3:1.7b",
+            "whisper_model": "medium",
+            "whisper_device": "cpu",
+            "whisper_compute_type": "int8",
+        },
         "very_fast": {
             "ollama_model": "qwen3:0.6b",
             "whisper_model": "tiny",
