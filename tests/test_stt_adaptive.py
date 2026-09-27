@@ -152,6 +152,29 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertEqual(rate, 16000)
         self.assertGreater(len(out), len(pcm))
 
+    def test_metadata_mode_returns_confidence_and_passes(self):
+        model = FakeModel([
+            ("Alfatest", -0.20),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 16000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący podaje nazwę swojej firmy po polsku.",
+                mode="normal",
+                return_metadata=True,
+            )
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["selected"], "Alfatest")
+        self.assertEqual(result["selected_score"], -0.20)
+        self.assertEqual(result["pass1"]["text"], "Alfatest")
+        self.assertIsNone(result["pass2"])
+        self.assertFalse(result["retry"])
+
     def test_confirmation_is_always_single_pass(self):
         model = FakeModel([
             ("Tak", -0.70),
