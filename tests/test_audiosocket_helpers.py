@@ -3,6 +3,7 @@ import unittest
 from app.audiosocket import (
     apply_llm_fill_only,
     extract_phone_digits,
+    looks_like_invalid_company_name,
     match_customer,
     matches_confirmation_phrase,
     parse_customer_directory,
@@ -41,8 +42,18 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertIsNone(customer)
 
     def test_extract_phone_digits(self):
-        self.assertEqual(extract_phone_digits("+48 792-032-104"), "48792032104")
+        self.assertEqual(extract_phone_digits("792-032-104"), "792032104")
+        self.assertEqual(extract_phone_digits("+48 792-032-104"), "792032104")
+        self.assertEqual(extract_phone_digits("0048 792 032 104"), "792032104")
+        self.assertEqual(extract_phone_digits("599-3131-2120"), "")
         self.assertEqual(extract_phone_digits("123"), "")
+
+    def test_rejects_whisper_company_hallucinations(self):
+        self.assertTrue(looks_like_invalid_company_name("www.youtube.com www.youtube.com"))
+        self.assertTrue(looks_like_invalid_company_name("napisy stworzone przez społeczność Amara.org"))
+        self.assertTrue(looks_like_invalid_company_name("www.multi-moto.eu"))
+        self.assertFalse(looks_like_invalid_company_name("Firma Alfatest"))
+        self.assertFalse(looks_like_invalid_company_name("Pizzeria Roma"))
 
     def test_confirmation_requires_exact_phrase(self):
         yes = ("tak", "zgadza się", "potwierdzam")
