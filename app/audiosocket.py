@@ -682,6 +682,33 @@ class CallSession:
                 pass
             return
 
+        # Goodbye is global conversation intent. Handle it before any local
+        # yes/no state (including company confirmation), otherwise "do widzenia"
+        # can be mistaken for an invalid confirmation response.
+        goodbye_phrases = (
+            "do widzenia",
+            "dziękuję do widzenia",
+            "dziekuje do widzenia",
+            "to wszystko",
+            "koniec",
+        )
+        if any(phrase in normalized for phrase in goodbye_phrases):
+            if self.has_complete_ticket_data() and not self.ticket_ref:
+                await self.finalize_ticket(
+                    uncertain=True,
+                    warning_text=(
+                        "UWAGA: Rozmówca zakończył rozmowę po podaniu opisu problemu, "
+                        "bez końcowego potwierdzenia danych."
+                    ),
+                )
+                return
+            self.final_status = "caller_ended"
+            await self.say("Dziękuję za rozmowę. Do widzenia.")
+            self.closed = True
+            await asyncio.sleep(0.2)
+            self.writer.close()
+            return
+
         # Treat obvious attempts to alter the agent's rules as untrusted content.
         # They never reach field assignment, confirmation or the general LLM path.
         if looks_like_prompt_injection(text):
@@ -751,30 +778,6 @@ class CallSession:
                 "Nie rozpoznałem jednoznacznej odpowiedzi. "
                 "Proszę powiedzieć tylko tak albo nie."
             )
-            return
-
-        goodbye_phrases = (
-            "do widzenia",
-            "dziękuję do widzenia",
-            "dziekuje do widzenia",
-            "to wszystko",
-            "koniec",
-        )
-        if any(phrase in normalized for phrase in goodbye_phrases):
-            if self.has_complete_ticket_data() and not self.ticket_ref:
-                await self.finalize_ticket(
-                    uncertain=True,
-                    warning_text=(
-                        "UWAGA: Rozmówca zakończył rozmowę po podaniu opisu problemu, "
-                        "bez końcowego potwierdzenia danych."
-                    ),
-                )
-                return
-            self.final_status = "caller_ended"
-            await self.say("Dziękuję za rozmowę. Do widzenia.")
-            self.closed = True
-            await asyncio.sleep(0.2)
-            self.writer.close()
             return
 
         if self.confirmation_pending:
