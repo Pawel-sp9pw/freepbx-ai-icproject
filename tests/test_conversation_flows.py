@@ -58,10 +58,12 @@ class ConversationHarness:
             this.last_tts_end = 0.0
             this.listen_not_before = 0.0
 
-        async def fake_finalize(this, uncertain=False):
+        async def fake_finalize(this, uncertain=False, silent=False, warning_text=""):
             self.saved.append({
                 "ticket": dict(this.ticket_data),
                 "uncertain": bool(uncertain),
+                "silent": bool(silent),
+                "warning_text": str(warning_text or ""),
             })
             this.confirmation_pending = False
             this.final_status = "completed_uncertain" if uncertain else "completed"
@@ -695,6 +697,40 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.ticket_data["description"], "Problem")
         self.assertNotIn("priority", h.session.ticket_data)
         self.assertNotIn("caller", h.session.ticket_data)
+
+    async def test_goodbye_after_description_saves_unconfirmed_ticket(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Nie działa e-skierowanie")
+        self.assertTrue(h.session.confirmation_pending)
+
+        await h.user("Do widzenia")
+
+        self.assertEqual(len(h.saved), 1)
+        self.assertTrue(h.saved[0]["uncertain"])
+        self.assertEqual(
+            h.saved[0]["ticket"]["description"],
+            "Nie działa e-skierowanie",
+        )
+
+    async def test_goodbye_before_description_does_not_save_ticket(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Do widzenia")
+
+        self.assertEqual(h.saved, [])
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
 
     async def test_caller_can_end_before_ticket_is_saved(self):
         h = ConversationHarness()
