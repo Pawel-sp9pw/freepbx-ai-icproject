@@ -118,7 +118,7 @@
         <thead>
           <tr>
             <th>Start</th>
-            <th>FreePBX</th>
+            <th>Trafność</th>
             <th>Status</th>
             <th>Czas</th>
             <th>Wiadomości</th>
@@ -856,7 +856,13 @@ PersistentKeepalive = 25"></textarea>
             html+=
               '<tr class="'+(expanded?'call-row-expanded':'')+'">'+
               '<td>'+esc(formatDate(c.started_at))+'</td>'+
-              '<td>'+esc(c.peer_ip || '—')+'</td>'+
+              '<td title="Szacowana trafność na podstawie confidence STT; nie jest to porównanie z tekstem wzorcowym">'+
+              (c.stt_accuracy_percent==null
+                ? '<span class="muted">—</span>'
+                : '<span class="badge '+(Number(c.stt_accuracy_percent)>=75?'ok':(Number(c.stt_accuracy_percent)>=55?'warn':'err'))+'">'+
+                  esc(c.stt_accuracy_percent)+'%</span>'+
+                  '<div class="muted">'+esc(c.stt_accuracy_samples || 0)+' prób.</div>')+
+              '</td>'+
               '<td>'+esc(c.status || '—')+'</td>'+
               '<td>'+esc(formatDuration(c.duration_seconds))+'</td>'+
               '<td>'+esc(c.message_count ?? 0)+'</td>'+
