@@ -1,4 +1,5 @@
 import logging
+import os
 from collections import Counter
 from pathlib import Path
 import tempfile
@@ -19,9 +20,24 @@ PROMPT_LEAK_PHRASES = (
 
 
 def get_model(name: str, device: str, compute_type: str):
-    key = (name, device, compute_type)
+    cpu_threads = min(8, max(1, int(os.cpu_count() or 1))) if device == "cpu" else 0
+    key = (name, device, compute_type, cpu_threads)
     if key not in _models:
-        _models[key] = WhisperModel(name, device=device, compute_type=compute_type)
+        kwargs = {
+            "device": device,
+            "compute_type": compute_type,
+        }
+        if device == "cpu":
+            kwargs["cpu_threads"] = cpu_threads
+            kwargs["num_workers"] = 1
+        _models[key] = WhisperModel(name, **kwargs)
+        log.info(
+            "Loaded Whisper model %s on %s (%s), cpu_threads=%s",
+            name,
+            device,
+            compute_type,
+            cpu_threads if device == "cpu" else "n/a",
+        )
     return _models[key]
 
 
@@ -127,21 +143,22 @@ def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
     clean = " ".join((text or "").split()).strip()
     words = clean.split()
 
+    # With 8 vCPU we can afford a precision pass for the fields that are most
+    # error-prone on narrow-band telephony.
     if mode == "company":
-        if not clean:
-            return True
-        if len(words) <= 3:
-            return True
-        return avg_logprob is not None and avg_logprob < -0.55
+        return True
+
+    if mode == "contact":
+        return True
 
     if mode == "problem":
         if not clean:
             return True
-        # Retry longer descriptions only when confidence is genuinely weak.
-        return avg_logprob is not None and avg_logprob < -0.62
-
-    if mode == "contact":
-        return not clean or (avg_logprob is not None and avg_logprob < -0.70)
+        if len(words) <= 5:
+            return True
+        if avg_logprob is None:
+            return True
+        return avg_logprob < -0.45
 
     return False
 
@@ -228,9 +245,11 @@ def transcribe_pcm16(
             model,
             path,
             initial_prompt,
-            beam_size=5,
-            use_vad=True,
-            patience=1.15,
+            beam_size=7,
+            # The application already segmented the utterance with WebRTC VAD.
+            # Running Whisper VAD again can clip short Polish words.
+            use_vad=False,
+            patience=1.30,
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
         if first_bad:
@@ -260,9 +279,9 @@ def transcribe_pcm16(
                 model,
                 path,
                 retry_prompt,
-                beam_size=8,
+                beam_size=10,
                 use_vad=False,
-                patience=1.35,
+                patience=1.60,
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
             if second_bad:
