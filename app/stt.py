@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from collections import Counter
 from pathlib import Path
 import tempfile
@@ -143,22 +144,33 @@ def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
     clean = " ".join((text or "").split()).strip()
     words = clean.split()
 
-    # With 8 vCPU we can afford a precision pass for the fields that are most
-    # error-prone on narrow-band telephony.
+    if not clean:
+        return True
+
     if mode == "company":
-        return True
-
-    if mode == "contact":
-        return True
-
-    if mode == "problem":
-        if not clean:
-            return True
-        if len(words) <= 5:
+        # Short proper names remain the most difficult telephone case.
+        # Retry only when short or when Whisper itself is not confident.
+        if len(words) <= 2:
             return True
         if avg_logprob is None:
+            return False
+        return avg_logprob < -0.42
+
+    if mode == "contact":
+        digits = re.sub(r"\D", "", clean)
+        if not (9 <= len(digits) <= 15):
             return True
-        return avg_logprob < -0.45
+        if avg_logprob is None:
+            return False
+        return avg_logprob < -0.55
+
+    if mode == "problem":
+        if avg_logprob is None:
+            return False
+        # Do not retry normal, clearly recognized descriptions. Short phrases
+        # get a slightly stricter threshold because one wrong word matters more.
+        threshold = -0.50 if len(words) <= 4 else -0.62
+        return avg_logprob < threshold
 
     return False
 
@@ -245,11 +257,10 @@ def transcribe_pcm16(
             model,
             path,
             initial_prompt,
-            beam_size=7,
+            beam_size=5,
             # The application already segmented the utterance with WebRTC VAD.
-            # Running Whisper VAD again can clip short Polish words.
             use_vad=False,
-            patience=1.30,
+            patience=1.10,
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
         if first_bad:
@@ -279,9 +290,9 @@ def transcribe_pcm16(
                 model,
                 path,
                 retry_prompt,
-                beam_size=10,
+                beam_size=8,
                 use_vad=False,
-                patience=1.60,
+                patience=1.30,
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
             if second_bad:
