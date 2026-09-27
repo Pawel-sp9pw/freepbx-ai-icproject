@@ -104,16 +104,97 @@ def speak_phone(value: str):
     return " ".join(digits) if digits else value
 
 
+def _spoken_polish_number_digits(value: str):
+    """Convert a conservative sequence of Polish number words to digits."""
+    text = (value or "").lower()
+    text = text.translate(str.maketrans({
+        "ą": "a", "ć": "c", "ę": "e", "ł": "l",
+        "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+    }))
+    tokens = re.findall(r"[a-z]+", text)
+    if not tokens:
+        return ""
+
+    units = {
+        "zero": 0, "jeden": 1, "jedna": 1, "jedno": 1,
+        "dwa": 2, "dwie": 2, "trzy": 3, "cztery": 4,
+        "piec": 5, "szesc": 6, "siedem": 7, "osiem": 8, "dziewiec": 9,
+    }
+    teens = {
+        "dziesiec": 10, "jedenascie": 11, "dwanascie": 12, "trzynascie": 13,
+        "czternascie": 14, "pietnascie": 15, "szesnascie": 16,
+        "siedemnascie": 17, "osiemnascie": 18, "dziewietnascie": 19,
+    }
+    tens = {
+        "dwadziescia": 20, "dwadziesta": 20, "trzydziesci": 30,
+        "czterdziesci": 40, "piecdziesiat": 50, "szescdziesiat": 60,
+        "siedemdziesiat": 70, "osiemdziesiat": 80, "dziewiecdziesiat": 90,
+    }
+    hundreds = {
+        "sto": 100, "dwiescie": 200, "trzysta": 300, "czterysta": 400,
+        "piecset": 500, "szescset": 600, "siedemset": 700,
+        "osiemset": 800, "dziewiecset": 900,
+    }
+    known = set(units) | set(teens) | set(tens) | set(hundreds)
+    if any(token not in known for token in tokens):
+        return ""
+
+    groups = []
+    current = 0
+    has_hundred = False
+    has_tens = False
+    has_unit = False
+
+    def flush():
+        nonlocal current, has_hundred, has_tens, has_unit
+        if has_hundred or has_tens or has_unit:
+            groups.append(str(current))
+        current = 0
+        has_hundred = has_tens = has_unit = False
+
+    for token in tokens:
+        if token in hundreds:
+            if has_hundred or has_tens or has_unit:
+                flush()
+            current = hundreds[token]
+            has_hundred = True
+        elif token in teens:
+            if has_tens or has_unit:
+                flush()
+            current += teens[token]
+            has_tens = True
+            has_unit = True
+        elif token in tens:
+            if has_tens or has_unit:
+                flush()
+            current += tens[token]
+            has_tens = True
+        else:
+            if token == "zero":
+                if has_hundred or has_tens or has_unit:
+                    flush()
+                groups.append("0")
+                continue
+            if has_unit:
+                flush()
+            current += units[token]
+            has_unit = True
+
+    flush()
+    return "".join(groups)
+
+
 def extract_phone_digits(value: str, mode: str = "pl"):
-    """Normalize a spoken contact number according to configured validation."""
+    """Normalize a typed or spoken contact number according to validation."""
     digits = re.sub(r"\D", "", value or "")
     mode = str(mode or "pl").lower()
+
+    if not digits:
+        digits = _spoken_polish_number_digits(value)
 
     if mode == "international":
         return digits if 7 <= len(digits) <= 15 else ""
 
-    # Polish mode: accept only an unambiguous 9-digit national number,
-    # optionally prefixed with 48 or 0048.
     if len(digits) == 9:
         return digits
     if len(digits) == 11 and digits.startswith("48"):
@@ -392,6 +473,13 @@ def match_customer(company: str, contact: str, directory: list):
             continue
 
         score = SequenceMatcher(None, source, target).ratio()
+        compact_source = source.replace(" ", "")
+        compact_target = target.replace(" ", "")
+        if compact_source and compact_target:
+            score = max(
+                score,
+                SequenceMatcher(None, compact_source, compact_target).ratio(),
+            )
 
         # Exact token containment is a strong signal for inputs such as
         # "Firma Paweł" vs "Paweł", after conversational prefixes are removed.
