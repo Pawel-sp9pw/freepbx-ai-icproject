@@ -191,6 +191,8 @@ def apply_llm_fill_only(ticket_data: dict, ticket_update: dict):
             continue
         if key == "description" and looks_like_ticket_meta_request(str(value)):
             continue
+        if key == "company" and looks_like_invalid_company_name(str(value)):
+            continue
         if ticket_data.get(key):
             continue
         ticket_data[key] = value
@@ -273,6 +275,7 @@ class CallSession:
         self.company_candidate = ""
         self.company_candidate_score = None
         self.company_confirmation_context = ""
+        self.company_candidate_phone = ""
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -299,7 +302,7 @@ class CallSession:
         self.silence_frames = 0
         self.stt_misses = 0
         self.last_tts_end = time.monotonic()
-        self.listen_not_before = self.last_tts_end + (0.20 if self.confirmation_pending else 0.45)
+        self.listen_not_before = self.last_tts_end + (0.20 if (self.confirmation_pending or self.company_confirmation_pending) else 0.45)
 
     async def say_confirmation_summary(self):
         company = str(self.ticket_data.get("company", "") or "").strip() or "nie podano"
@@ -381,7 +384,9 @@ class CallSession:
             return {"intent": "unknown", "company": "", "contact": "", "description": ""}
 
     async def refuse_out_of_scope(self):
-        if self.confirmation_pending:
+        if self.company_confirmation_pending:
+            await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę powiedzieć tak albo nie.")
+        elif self.confirmation_pending:
             await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę powiedzieć tak albo nie.")
         elif self.awaiting_correction:
             if self.correction_field == "company":
@@ -551,7 +556,7 @@ class CallSession:
         if not text:
             self.stt_misses += 1
             now = time.monotonic()
-            wait_before_repeat = 2.0 if self.confirmation_pending else 4.0
+            wait_before_repeat = 2.0 if (self.confirmation_pending or self.company_confirmation_pending) else 4.0
             enough_time_to_answer = (now - self.last_tts_end) >= wait_before_repeat
             repeat_cooldown_ok = (now - self.last_repeat_prompt) >= 8.0
             if self.stt_misses >= 3 and enough_time_to_answer and repeat_cooldown_ok:
@@ -587,11 +592,14 @@ class CallSession:
 
             if matches_confirmation_phrase(normalized, yes_phrases):
                 self.ticket_data["company"] = self.company_candidate
+                if self.company_candidate_phone and not self.ticket_data.get("contact"):
+                    self.ticket_data["contact"] = self.company_candidate_phone
                 context = self.company_confirmation_context
                 self.company_confirmation_pending = False
                 self.company_candidate = ""
                 self.company_candidate_score = None
                 self.company_confirmation_context = ""
+                self.company_candidate_phone = ""
 
                 if context == "correction":
                     self.awaiting_correction = False
@@ -620,6 +628,7 @@ class CallSession:
                 self.company_candidate = ""
                 self.company_candidate_score = None
                 self.company_confirmation_context = ""
+                self.company_candidate_phone = ""
                 if context == "correction":
                     self.awaiting_correction = True
                     self.correction_field = "company"
@@ -789,6 +798,7 @@ class CallSession:
                         self.company_candidate = company_text
                         self.company_candidate_score = float(selected_score)
                         self.company_confirmation_context = "correction"
+                        self.company_candidate_phone = ""
                         await self.say(
                             f"Czy dobrze zrozumiałem poprawioną nazwę: {company_text}? "
                             "Proszę powiedzieć tak albo nie."
@@ -895,6 +905,7 @@ class CallSession:
                     self.company_candidate = company_text
                     self.company_candidate_score = float(selected_score)
                     self.company_confirmation_context = "initial"
+                    self.company_candidate_phone = phone or ""
                     self.awaiting_company = False
                     await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
                     return
