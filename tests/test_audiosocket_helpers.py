@@ -47,6 +47,8 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertEqual(extract_phone_digits("0048 792 032 104"), "792032104")
         self.assertEqual(extract_phone_digits("599-3131-2120"), "")
         self.assertEqual(extract_phone_digits("123"), "")
+        self.assertEqual(extract_phone_digits("+44 20 7946 0958", "pl"), "")
+        self.assertEqual(extract_phone_digits("+44 20 7946 0958", "international"), "442079460958")
 
     def test_rejects_whisper_company_hallucinations(self):
         self.assertTrue(looks_like_invalid_company_name("www.youtube.com www.youtube.com"))
