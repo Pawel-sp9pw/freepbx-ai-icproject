@@ -905,6 +905,10 @@ class CallSession:
             "koniec",
         )
         if any(phrase in normalized for phrase in goodbye_phrases):
+            # Clear local confirmation states before ending the call so the
+            # session cannot remain logically pending after a goodbye.
+            self.company_confirmation_pending = False
+            self.confirmation_pending = False
             if self.has_complete_ticket_data() and not self.ticket_ref:
                 await self.finalize_ticket(
                     uncertain=True,
