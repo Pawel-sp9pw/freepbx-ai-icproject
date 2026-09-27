@@ -153,14 +153,14 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertEqual(model.calls[0]["beam_size"], 5)
         self.assertFalse(model.calls[0]["vad_filter"])
 
-    def test_company_second_pass_drops_prompt(self):
+    def test_rejected_company_pass_drops_prompt_on_retry(self):
         model = FakeModel([
-            ("Fitzseria", -0.55),
+            ("Dzwoniący podaje nazwę swojej firmy po polsku.", -0.10),
             ("Pizzeria", -0.18),
         ])
         with patch.object(stt, "get_model", return_value=model):
             text = stt.transcribe_pcm16(
-                b"\x00" * 16000,
+                b"\x00" * 16000,  # 1.0 s: long enough to allow retry
                 model_name="medium",
                 device="cpu",
                 compute_type="int8",
