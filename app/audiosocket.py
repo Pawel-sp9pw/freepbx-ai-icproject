@@ -409,6 +409,16 @@ class CallSession:
             for key in ("company", "contact", "description")
         )
 
+    def problem_confidence_is_high(self, selected_score):
+        """Return True only for a strongly recognized problem description."""
+        if selected_score is None:
+            return False
+        try:
+            threshold = float(self.settings.get("problem_auto_accept_logprob", -0.30))
+            return float(selected_score) >= threshold
+        except (TypeError, ValueError):
+            return False
+
     async def finalize_ticket(self, uncertain=False, silent=False, warning_text=""):
         ticket = dict(self.ticket_data)
         if uncertain:
@@ -982,6 +992,13 @@ class CallSession:
                 self.ticket_data["description"] = text.strip()
                 self.ticket_data["title"] = text.strip()[:80] or "Zgłoszenie telefoniczne"
 
+                if self.has_complete_ticket_data() and self.problem_confidence_is_high(selected_score):
+                    self.awaiting_correction = False
+                    self.correction_field = ""
+                    self.confirmation_pending = False
+                    await self.finalize_ticket()
+                    return
+
             self.awaiting_correction = False
             self.correction_field = ""
             self.correction_attempts += 1
@@ -1137,13 +1154,19 @@ class CallSession:
                 if not self.ticket_data.get("title"):
                     self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
 
-                self.confirmation_pending = True
-                self.confirmation_misses = 0
                 self.awaiting_correction = False
                 self.awaiting_company = False
                 self.awaiting_contact = False
                 self.awaiting_problem = False
 
+                if self.problem_confidence_is_high(selected_score):
+                    self.confirmation_pending = False
+                    self.confirmation_misses = 0
+                    await self.finalize_ticket()
+                    return
+
+                self.confirmation_pending = True
+                self.confirmation_misses = 0
                 await self.say_confirmation_summary()
                 return
 
@@ -1258,9 +1281,15 @@ class CallSession:
             spoken_contact = speak_phone(contact) if contact != "nie podano" else contact
             description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
 
+            self.awaiting_correction = False
+            if self.problem_confidence_is_high(selected_score):
+                self.confirmation_pending = False
+                self.confirmation_misses = 0
+                await self.finalize_ticket()
+                return
+
             self.confirmation_pending = True
             self.confirmation_misses = 0
-            self.awaiting_correction = False
             await self.say_confirmation_summary()
             return
 
