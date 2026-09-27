@@ -37,6 +37,9 @@ class ConversationHarness:
             "ollama_model": "qwen3:1.7b",
             "system_prompt": "",
             "stt_prompt": "",
+            "stt_problem_hint": "Problem może dotyczyć e-recepty, P1, NFZ, faktur i drukarki fiskalnej.",
+            "company_confirm_logprob": -0.55,
+            "phone_validation_mode": "pl",
             "max_turns": 12,
             "silence_ms": 900,
             "piper_url": "http://127.0.0.1:5000",
@@ -71,10 +74,25 @@ class ConversationHarness:
     async def start(self):
         await self.session.start()
 
-    async def user(self, text):
+    async def user(self, text, score=None):
         # process_utterance executes STT in asyncio.to_thread. Supplying the
         # transcript here lets the real conversation state machine run unchanged.
-        with patch.object(audiosocket, "transcribe_pcm16", return_value=text),              patch.object(audiosocket, "add_message", return_value=None),              patch.object(audiosocket.asyncio, "sleep", new=_no_sleep):
+        result = text
+        if score is not None:
+            result = {
+                "selected": text,
+                "selected_score": score,
+                "mode": self.session.stt_mode_for_state(),
+                "audio_seconds": 0.6,
+                "model": "small",
+                "pass1": {"text": text, "score": score, "rejected": False, "reason": ""},
+                "pass2": None,
+                "retry": False,
+                "retry_reason": "",
+            }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=result), \
+             patch.object(audiosocket, "add_message", return_value=None), \
+             patch.object(audiosocket.asyncio, "sleep", new=_no_sleep):
             await self.session.process_utterance(b"\x00" * 9600)
 
 
@@ -128,6 +146,57 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any("nazwę firmy" in x.lower() or "nazwe firmy" in x.lower() for x in h.spoken)
         )
+
+    async def test_uncertain_unknown_company_requires_confirmation(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Alfatest", score=-0.72)
+
+        self.assertTrue(h.session.company_confirmation_pending)
+        self.assertNotIn("company", h.session.ticket_data)
+        self.assertTrue(any("czy dobrze zrozumiałem" in x.lower() for x in h.spoken))
+
+        await h.user("tak", score=-0.1)
+        self.assertEqual(h.session.ticket_data["company"], "Alfatest")
+        self.assertTrue(h.session.awaiting_contact)
+
+    async def test_confident_unknown_company_skips_extra_confirmation(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Alfatest", score=-0.25)
+
+        self.assertFalse(h.session.company_confirmation_pending)
+        self.assertEqual(h.session.ticket_data["company"], "Alfatest")
+        self.assertTrue(h.session.awaiting_contact)
+
+    async def test_dictionary_company_skips_low_confidence_confirmation(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Alfatest", "phone": "600100200"}]
+        await h.start()
+
+        await h.user("Alfatest", score=-0.80)
+
+        self.assertFalse(h.session.company_confirmation_pending)
+        self.assertEqual(h.session.ticket_data["company"], "Alfatest")
+        self.assertEqual(h.session.ticket_data["contact"], "600100200")
+        self.assertTrue(h.session.awaiting_problem)
+
+    async def test_uncertain_company_rejected_and_reentered(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Alfatest", score=-0.80)
+        await h.user("nie", score=-0.1)
+
+        self.assertTrue(h.session.awaiting_company)
+        self.assertFalse(h.session.company_confirmation_pending)
+        self.assertNotIn("company", h.session.ticket_data)
+
+        await h.user("Beta Med", score=-0.20)
+        self.assertEqual(h.session.ticket_data["company"], "Beta Med")
+        self.assertTrue(h.session.awaiting_contact)
 
     async def test_unknown_caller_collects_company_contact_problem_and_confirms(self):
         h = ConversationHarness()
