@@ -229,11 +229,11 @@ def _needs_adaptive_retry(text: str, avg_logprob, mode: str):
 
     if mode == "contact":
         digits = re.sub(r"\D", "", clean)
-        if not (9 <= len(digits) <= 15):
-            return True
-        if avg_logprob is None:
+        # A structurally valid phone number is already strong evidence. Do not
+        # spend a second decode only because avg_logprob is slightly low.
+        if 9 <= len(digits) <= 15:
             return False
-        return avg_logprob < -0.55
+        return True
 
     if mode == "problem":
         if avg_logprob is None:
@@ -454,7 +454,11 @@ def transcribe_pcm16(
                 )
             selected_score = None
             if selected:
-                if second_text and selected == second_text:
+                # When both passes returned identical text, _choose_candidate
+                # intentionally keeps pass 1; preserve its confidence too.
+                if first_text and second_text and first_text.lower() == second_text.lower():
+                    selected_score = first_score
+                elif second_text and selected == second_text:
                     selected_score = second_score
                 elif first_text and selected == first_text:
                     selected_score = first_score
