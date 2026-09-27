@@ -28,6 +28,8 @@
     .call-group-count{font-weight:400;color:#666;margin-left:8px}
     .msg{padding:8px 10px;margin:7px 0;border-radius:8px;background:#f3f4f6;white-space:pre-wrap}
     .msg.user{background:#eef4ff}.msg.assistant{background:#eef9ee}
+    .call-tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .copy-status{margin-left:6px}
     @media(max-width:700px){.grid{grid-template-columns:1fr} table{font-size:.82em}}
   </style>
 </head>
@@ -544,6 +546,107 @@ PersistentKeepalive = 25"></textarea>
   let callGroupsInitialized=false;
   let callsRefreshBusy=false;
   let callDetailsRefreshBusy=false;
+  const openSttDetails=new Set();
+
+  function rememberSttDetail(el){
+    const key=el?.dataset?.sttKey;
+    if(!key) return;
+    if(el.open) openSttDetails.add(key);
+    else openSttDetails.delete(key);
+  }
+
+  function restoreOpenSttDetails(){
+    document.querySelectorAll('details[data-stt-key]').forEach(el=>{
+      const key=el.dataset.sttKey;
+      if(openSttDetails.has(key)) el.open=true;
+    });
+  }
+
+  async function writeClipboard(text){
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const ta=document.createElement('textarea');
+    ta.value=text;
+    ta.style.position='fixed';
+    ta.style.opacity='0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+
+  function formatSttDebugForClipboard(content){
+    try{
+      const d=JSON.parse(content || '{}');
+      const p1=d.pass1 || {};
+      const p2=d.pass2 || {};
+      const fmt=v=>(v===null || v===undefined)?'n/a':Number(v).toFixed(3);
+      let out='[STT '+(d.mode || 'normal')+'] selected='+JSON.stringify(d.selected || '')+
+        ' score='+fmt(d.selected_score)+
+        ' retry='+(d.retry?'yes':'no');
+      out+='\n  pass1='+JSON.stringify(p1.text || '')+
+        ' score='+fmt(p1.score)+
+        (p1.rejected?' rejected='+String(p1.reason || 'yes'):'');
+      if(d.pass2){
+        out+='\n  pass2='+JSON.stringify(p2.text || '')+
+          ' score='+fmt(p2.score)+
+          (p2.rejected?' rejected='+String(p2.reason || 'yes'):'');
+      }
+      if(d.retry_reason) out+='\n  retry_reason='+d.retry_reason;
+      if(d.audio_seconds!==undefined) out+='\n  audio_seconds='+d.audio_seconds;
+      if(d.model) out+='\n  model='+d.model;
+      return out;
+    }catch(e){
+      return '[STT raw] '+String(content || '');
+    }
+  }
+
+  function callClipboardText(c, includeDebug){
+    const lines=[];
+    lines.push('Rozmowa: '+(c.call_id || '—'));
+    lines.push('Status: '+(c.status || '—'));
+    lines.push('FreePBX: '+(c.peer_ip || '—'));
+    lines.push('Start: '+formatDate(c.started_at));
+    lines.push('Koniec: '+formatDate(c.ended_at));
+    if(c.ticket_ref) lines.push('Zgłoszenie: '+c.ticket_ref);
+    if(c.error) lines.push('Błąd: '+c.error);
+    lines.push('');
+    lines.push(includeDebug ? '=== ROZMOWA + DEBUG STT ===' : '=== ROZMOWA ===');
+
+    for(const m of (c.messages || [])){
+      if(m.role==='stt_debug'){
+        if(includeDebug) lines.push(formatSttDebugForClipboard(m.content));
+        continue;
+      }
+      if(m.role==='user') lines.push('Klient: '+m.content);
+      else if(m.role==='assistant') lines.push('Agent: '+m.content);
+      else if(includeDebug) lines.push((m.role || 'inne')+': '+m.content);
+    }
+    return lines.join('\n');
+  }
+
+  async function copyCall(callId, includeDebug){
+    const status=document.getElementById('copyStatus-'+callId);
+    try{
+      const r=await fetch('/api/calls/'+encodeURIComponent(callId),{cache:'no-store'});
+      const c=await r.json();
+      if(!r.ok) throw new Error(c.detail || 'Błąd pobierania rozmowy');
+      await writeClipboard(callClipboardText(c, includeDebug));
+      if(status){
+        status.textContent=includeDebug?'skopiowano debug':'skopiowano rozmowę';
+        status.className='copy-status ok';
+        setTimeout(()=>{status.textContent='';},2500);
+      }
+    }catch(e){
+      if(status){
+        status.textContent='błąd kopiowania: '+e;
+        status.className='copy-status err';
+      }
+    }
+  }
 
   async function loadInlineCallDetails(callId){
     if(!callId || callDetailsRefreshBusy) return;
@@ -564,8 +667,14 @@ PersistentKeepalive = 25"></textarea>
         ' · status: '+esc(c.status || '—')+
         (c.ticket_ref ? ' · zgłoszenie: '+esc(c.ticket_ref) : '')+
         '</div>'+
-        (c.error ? '<div class="err" style="margin-top:8px"><strong>Błąd:</strong> '+esc(c.error)+'</div>' : '');
+        (c.error ? '<div class="err" style="margin-top:8px"><strong>Błąd:</strong> '+esc(c.error)+'</div>' : '')+
+        '<div class="call-tools">'+
+        '<button type="button" class="test" onclick="copyCall(\''+esc(c.call_id)+'\',false)">Kopiuj rozmowę</button>'+
+        '<button type="button" class="test" onclick="copyCall(\''+esc(c.call_id)+'\',true)">Kopiuj debug</button>'+
+        '<span id="copyStatus-'+esc(c.call_id)+'" class="copy-status muted"></span>'+
+        '</div>';
 
+      let sttIndex=0;
       for(const m of (c.messages || [])){
         if(m.role==='stt_debug'){
           let summary='Diagnostyka STT';
@@ -581,9 +690,15 @@ PersistentKeepalive = 25"></textarea>
               (d.pass2?'\npass2: '+(p2.text || '—')+' | score='+(p2.score===null || p2.score===undefined?'n/a':Number(p2.score).toFixed(3))+
               (p2.rejected?' | odrzucono: '+(p2.reason || ''):''):'')+
               (d.retry_reason?'\npowód retry: '+d.retry_reason:'');
-            html+='<details class="msg" style="background:#f7f7f7"><summary><strong>'+summary+'</strong></summary><pre style="white-space:pre-wrap;margin:8px 0 0 0">'+esc(details)+'</pre></details>';
+            const sttKey=c.call_id+':'+sttIndex;
+            const openAttr=openSttDetails.has(sttKey)?' open':'';
+            html+='<details class="msg" data-stt-key="'+esc(sttKey)+'"'+openAttr+' ontoggle="rememberSttDetail(this)" style="background:#f7f7f7"><summary><strong>'+summary+'</strong></summary><pre style="white-space:pre-wrap;margin:8px 0 0 0">'+esc(details)+'</pre></details>';
+            sttIndex++;
           }catch(e){
-            html+='<details class="msg"><summary><strong>Diagnostyka STT</strong></summary><pre>'+esc(m.content)+'</pre></details>';
+            const sttKey=c.call_id+':'+sttIndex;
+            const openAttr=openSttDetails.has(sttKey)?' open':'';
+            html+='<details class="msg" data-stt-key="'+esc(sttKey)+'"'+openAttr+' ontoggle="rememberSttDetail(this)"><summary><strong>Diagnostyka STT</strong></summary><pre>'+esc(m.content)+'</pre></details>';
+            sttIndex++;
           }
           continue;
         }
@@ -593,6 +708,7 @@ PersistentKeepalive = 25"></textarea>
       }
       html+='</div>';
       box.innerHTML=html;
+      restoreOpenSttDetails();
       callDetailsCache[callId]=html;
     }catch(e){
       if(box) box.innerHTML='<div class="call-details-inline"><span class="err">BŁĄD — '+esc(e)+'</span></div>';
@@ -759,6 +875,7 @@ PersistentKeepalive = 25"></textarea>
       }
 
       body.innerHTML=html;
+      restoreOpenSttDetails();
 
       if(expandedCallId && expandedVisible){
         const needsInitialLoad=!callDetailsCache[expandedCallId];
