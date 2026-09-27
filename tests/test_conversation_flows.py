@@ -373,6 +373,36 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             any("na czym polega problem" in x.lower() for x in h.spoken)
         )
 
+    async def test_accept_ticket_command_is_not_saved_as_problem(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Przyjmij zgłoszenie testowe.")
+
+        self.assertTrue(h.session.awaiting_problem)
+        self.assertNotIn("description", h.session.ticket_data)
+        self.assertEqual(h.saved, [])
+        self.assertTrue(
+            any("na czym polega problem" in x.lower() for x in h.spoken)
+        )
+
+    async def test_register_ticket_command_is_not_saved_as_problem(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Paweł",
+            "contact": "792032104",
+        }
+
+        await h.start()
+        await h.user("Zarejestruj zgłoszenie serwisowe")
+
+        self.assertTrue(h.session.awaiting_problem)
+        self.assertNotIn("description", h.session.ticket_data)
+
     async def test_meta_request_with_real_problem_is_accepted(self):
         h = ConversationHarness()
         h.session.ticket_data = {
