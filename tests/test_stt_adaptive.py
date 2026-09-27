@@ -90,6 +90,28 @@ class AdaptiveSTTTests(unittest.TestCase):
         selected = stt._choose_candidate("Pizzeria", -0.20, "Fitzseria", -0.50)
         self.assertEqual(selected, "Pizzeria")
 
+    def test_short_prompt_leak_skips_second_pass(self):
+        model = FakeModel([
+            ("Dzwoniący podaje nazwę swojej firmy po polsku. " * 5, -0.10),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 9600,  # 0.6 s at 8 kHz / 16 bit
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący podaje nazwę swojej firmy po polsku.",
+                mode="company",
+                return_metadata=True,
+            )
+
+        self.assertEqual(result["selected"], "")
+        self.assertEqual(len(model.calls), 1)
+        self.assertIsNone(result["pass2"])
+        self.assertFalse(result["retry"])
+        self.assertEqual(result["retry_reason"], "short_rejected_audio")
+
     def test_company_nonempty_low_confidence_skips_precision_pass(self):
         model = FakeModel([
             ("Tomek", -0.84),
