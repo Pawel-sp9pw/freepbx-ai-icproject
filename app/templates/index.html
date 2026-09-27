@@ -111,28 +111,6 @@
   </div>
 
   <div class="card">
-    <h2>Aktualizacja</h2>
-    <p class="muted">
-      Aktualizuje kod agenta i panelu z repozytorium GitHub, zależności Python oraz jednostki systemd.
-      Ustawienia lokalne i baza rozmów nie są usuwane.
-    </p>
-    <button type="button" class="test" id="updateButton" onclick="startUpdate()">Aktualizuj agenta i panel</button>
-    <span id="updateStatus" class="muted">bez uruchomionej aktualizacji</span>
-    <pre id="updateLog" style="display:none;max-height:280px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
-  </div>
-
-  <div class="card">
-    <h2>Testy regresyjne / bezpieczeństwa</h2>
-    <p class="muted">
-      Uruchamia lokalny zestaw testów bezpieczeństwa i logiki rozmowy.
-      Testy nie są uruchamiane podczas aktywnej rozmowy.
-    </p>
-    <button type="button" class="test" id="testsButton" onclick="startRegressionTests()">Uruchom testy</button>
-    <span id="testsStatus" class="muted">brak uruchomionych testów</span>
-    <pre id="testsLog" style="display:none;max-height:360px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
-  </div>
-
-  <div class="card">
     <h2>Rozmowy</h2>
     <p class="muted">Historia jest zapisywana lokalnie w SQLite od momentu instalacji tej wersji.</p>
     <div style="overflow-x:auto">
@@ -155,7 +133,30 @@
     </div>
   </div>
 
-  {% if request.query_params.get('saved') %}
+
+<div class="card">
+    <h2>Aktualizacja</h2>
+    <p class="muted">
+      Aktualizuje kod agenta i panelu z repozytorium GitHub, zależności Python oraz jednostki systemd.
+      Ustawienia lokalne i baza rozmów nie są usuwane.
+    </p>
+    <button type="button" class="test" id="updateButton" onclick="startUpdate()">Aktualizuj agenta i panel</button>
+    <span id="updateStatus" class="muted">bez uruchomionej aktualizacji</span>
+    <pre id="updateLog" style="display:none;max-height:280px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Testy regresyjne / bezpieczeństwa</h2>
+    <p class="muted">
+      Uruchamia lokalny zestaw testów bezpieczeństwa i logiki rozmowy.
+      Testy nie są uruchamiane podczas aktywnej rozmowy.
+    </p>
+    <button type="button" class="test" id="testsButton" onclick="startRegressionTests()">Uruchom testy</button>
+    <span id="testsStatus" class="muted">brak uruchomionych testów</span>
+    <pre id="testsLog" style="display:none;max-height:360px;overflow:auto;background:#111;color:#eee;padding:10px;border-radius:8px;white-space:pre-wrap"></pre>
+  </div>
+
+    {% if request.query_params.get('saved') %}
   <p class="ok">Ustawienia zapisane.</p>
   {% endif %}
 
