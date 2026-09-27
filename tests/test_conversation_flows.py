@@ -227,6 +227,60 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             any("tylko tak albo nie" in x.lower() for x in h.spoken)
         )
 
+    async def test_ticket_meta_request_is_not_saved_as_problem(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Marcin",
+            "contact": "608411319",
+        }
+
+        await h.start()
+        await h.user("Utwórz to testowe zgłoszenie i przekaż je na serwis")
+
+        self.assertTrue(h.session.awaiting_problem)
+        self.assertNotIn("description", h.session.ticket_data)
+        self.assertEqual(h.saved, [])
+        self.assertTrue(
+            any("na czym polega problem" in x.lower() for x in h.spoken)
+        )
+
+    async def test_meta_request_with_real_problem_is_accepted(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Marcin",
+            "contact": "608411319",
+        }
+
+        await h.start()
+        await h.user("Utwórz zgłoszenie, bo nie działa drukarka")
+
+        self.assertEqual(
+            h.session.ticket_data.get("description"),
+            "Utwórz zgłoszenie, bo nie działa drukarka",
+        )
+        self.assertTrue(h.session.confirmation_pending)
+
+    async def test_meta_request_is_rejected_during_description_correction(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Marcin",
+            "contact": "608411319",
+        }
+
+        await h.start()
+        await h.user("Nie działa drukarka")
+        await h.user("nie")
+        await h.user("opis problemu")
+        await h.user("Przekaż to zgłoszenie na serwis")
+
+        self.assertTrue(h.session.awaiting_correction)
+        self.assertEqual(h.session.correction_field, "description")
+        self.assertEqual(h.session.ticket_data["description"], "Nie działa drukarka")
+        self.assertEqual(h.session.correction_attempts, 0)
+        self.assertTrue(
+            any("na czym polega problem lub usterka" in x.lower() for x in h.spoken)
+        )
+
     async def test_prompt_injection_during_problem_does_not_change_ticket(self):
         h = ConversationHarness()
         h.session.ticket_data = {
