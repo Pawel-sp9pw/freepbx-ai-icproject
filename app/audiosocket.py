@@ -692,14 +692,22 @@ class CallSession:
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 self.awaiting_correction = True
-                self.correction_field = ""
                 self.awaiting_company = False
                 self.awaiting_contact = False
                 self.awaiting_problem = False
-                await self.say(
-                    "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
-                    "nazwę firmy, numer kontaktowy albo opis problemu."
-                )
+
+                # When CallerID was matched to the customer directory, company
+                # and contact are trusted data. Only the spoken problem can
+                # require correction.
+                if self.caller_matched_customer:
+                    self.correction_field = "description"
+                    await self.say("Dobrze. Proszę podać poprawny opis problemu.")
+                else:
+                    self.correction_field = ""
+                    await self.say(
+                        "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
+                        "nazwę firmy, numer kontaktowy albo opis problemu."
+                    )
                 return
 
             # Ambiguous confirmation must never create a ticket.
@@ -715,10 +723,18 @@ class CallSession:
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 self.awaiting_correction = True
-                await self.say(
-                    "Dobrze. Proszę podać tylko dane, które mam poprawić: "
-                    "nazwę firmy, numer kontaktowy albo opis problemu."
-                )
+                self.awaiting_company = False
+                self.awaiting_contact = False
+                self.awaiting_problem = False
+                if self.caller_matched_customer:
+                    self.correction_field = "description"
+                    await self.say("Dobrze. Proszę podać poprawny opis problemu.")
+                else:
+                    self.correction_field = ""
+                    await self.say(
+                        "Dobrze. Proszę podać tylko dane, które mam poprawić: "
+                        "nazwę firmy, numer kontaktowy albo opis problemu."
+                    )
                 return
 
             self.confirmation_misses += 1
