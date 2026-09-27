@@ -41,6 +41,34 @@ class AudioSocketRegressionTests(unittest.TestCase):
         customer, _ = match_customer("", "600111222", directory)
         self.assertIsNone(customer)
 
+    def test_fuzzy_customer_match_repairs_common_short_name_errors(self):
+        directory = [
+            {"name": "Artur", "phone": "604943274"},
+            {"name": "Marcin", "phone": "608411319"},
+            {"name": "Tomek", "phone": "790205140"},
+        ]
+
+        customer, score = match_customer("Marci", "", directory)
+        self.assertEqual(customer["name"], "Marcin")
+        self.assertGreaterEqual(score, 0.62)
+
+        customer, score = match_customer("Atul", "", directory)
+        self.assertEqual(customer["name"], "Artur")
+        self.assertGreaterEqual(score, 0.62)
+
+        customer, score = match_customer("Firma Tomek", "", directory)
+        self.assertEqual(customer["name"], "Tomek")
+        self.assertEqual(score, 1.0)
+
+    def test_fuzzy_customer_match_does_not_guess_ambiguous_short_name(self):
+        directory = [
+            {"name": "Artur", "phone": "604943274"},
+            {"name": "Artus", "phone": "600000001"},
+        ]
+        customer, score = match_customer("Atur", "", directory)
+        self.assertIsNone(customer)
+        self.assertGreater(score, 0.0)
+
     def test_extract_phone_digits(self):
         self.assertEqual(extract_phone_digits("792-032-104"), "792032104")
         self.assertEqual(extract_phone_digits("+48 792-032-104"), "792032104")
