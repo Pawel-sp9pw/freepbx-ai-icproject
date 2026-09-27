@@ -403,10 +403,16 @@ class CallSession:
         await asyncio.sleep(0.35)
         await self.say("Proszę powiedzieć tak, jeśli dane są poprawne, albo nie, jeśli wymagają poprawy.")
 
-    async def finalize_ticket(self, uncertain=False):
+    def has_complete_ticket_data(self):
+        return all(
+            str(self.ticket_data.get(key, "") or "").strip()
+            for key in ("company", "contact", "description")
+        )
+
+    async def finalize_ticket(self, uncertain=False, silent=False, warning_text=""):
         ticket = dict(self.ticket_data)
         if uncertain:
-            warning = (
+            warning = warning_text.strip() or (
                 "UWAGA: Agent głosowy nie zdołał jednoznacznie potwierdzić danych po 3 próbach poprawki. "
                 "Wymagany kontakt zwrotny z osobą zgłaszającą w celu doprecyzowania zgłoszenia."
             )
@@ -424,31 +430,40 @@ class CallSession:
             ticket_no = created.get("number") or created.get("shortCode") or ""
             self.ticket_ref = str(ticket_no or created.get("id") or "")
             self.final_status = "completed_uncertain" if uncertain else "completed"
-            if uncertain:
-                await self.say(
-                    "Dziękuję. Zgłoszenie zostało przyjęte. "
-                    "Nie udało mi się dokładnie rozpoznać wszystkich poprawek. "
-                    "Ktoś z serwisu skontaktuje się w celu doprecyzowania. Do widzenia."
-                )
-            else:
-                await self.say(
-                    "Dziękuję. Zgłoszenie zostało zapisane. "
-                    "Ktoś z serwisu skontaktuje się w tej sprawie. Do widzenia."
-                )
+            if not silent:
+                if uncertain and warning_text:
+                    await self.say(
+                        "Dziękuję. Zgłoszenie zostało zapisane. "
+                        "Ktoś z serwisu skontaktuje się w tej sprawie. Do widzenia."
+                    )
+                elif uncertain:
+                    await self.say(
+                        "Dziękuję. Zgłoszenie zostało przyjęte. "
+                        "Nie udało mi się dokładnie rozpoznać wszystkich poprawek. "
+                        "Ktoś z serwisu skontaktuje się w celu doprecyzowania. Do widzenia."
+                    )
+                else:
+                    await self.say(
+                        "Dziękuję. Zgłoszenie zostało zapisane. "
+                        "Ktoś z serwisu skontaktuje się w tej sprawie. Do widzenia."
+                    )
             self.closed = True
-            await asyncio.sleep(0.3)
+            if not silent:
+                await asyncio.sleep(0.3)
             self.writer.close()
             return True
         except Exception as e:
             self.final_status = "icp_error"
             self.final_error = str(e)
             log.exception("[%s] ICP create error", self.call_id)
-            await self.say(
-                "Nie udało się zapisać zgłoszenia w systemie. "
-                "Proszę skontaktować się z serwisem. Do widzenia."
-            )
+            if not silent:
+                await self.say(
+                    "Nie udało się zapisać zgłoszenia w systemie. "
+                    "Proszę skontaktować się z serwisem. Do widzenia."
+                )
             self.closed = True
-            await asyncio.sleep(0.2)
+            if not silent:
+                await asyncio.sleep(0.2)
             self.writer.close()
             return False
 
@@ -746,6 +761,15 @@ class CallSession:
             "koniec",
         )
         if any(phrase in normalized for phrase in goodbye_phrases):
+            if self.has_complete_ticket_data() and not self.ticket_ref:
+                await self.finalize_ticket(
+                    uncertain=True,
+                    warning_text=(
+                        "UWAGA: Rozmówca zakończył rozmowę po podaniu opisu problemu, "
+                        "bez końcowego potwierdzenia danych."
+                    ),
+                )
+                return
             self.final_status = "caller_ended"
             await self.say("Dziękuję za rozmowę. Do widzenia.")
             self.closed = True
@@ -1321,6 +1345,22 @@ async def handle_client(reader, writer):
         session.final_error = str(e)
         log.exception("[%s] AudioSocket session error", call_id)
     finally:
+        # If the caller hangs up after already providing all ticket data, save
+        # the ticket even when the final yes/no confirmation never arrived.
+        if (
+            not session.ticket_ref
+            and session.has_complete_ticket_data()
+            and session.final_status not in ("completed", "completed_uncertain", "icp_error")
+        ):
+            await session.finalize_ticket(
+                uncertain=True,
+                silent=True,
+                warning_text=(
+                    "UWAGA: Rozmówca rozłączył się po podaniu opisu problemu, "
+                    "bez końcowego potwierdzenia danych."
+                ),
+            )
+
         finish_call(
             call_id,
             status=session.final_status,
