@@ -32,6 +32,7 @@ DEFAULTS = {
     "whisper_model": "small",
     "whisper_device": "cpu",
     "whisper_compute_type": "int8",
+    "stt_workers": 2,
     "stt_prompt": "Rozmowa telefoniczna z polskim serwisem IT. Dzwoniący podaje nazwę firmy, numer telefonu lub opis problemu.",
     "stt_problem_hint": "Problem może dotyczyć e-recepty, P1, NFZ, faktur, paragonów, drukarki fiskalnej lub systemu MediQus.",
     "company_confirm_logprob": -0.55,
