@@ -19,6 +19,21 @@ PROMPT_LEAK_PHRASES = (
     "krotka odpowiedz na pytanie o potwierdzenie",
 )
 
+KNOWN_WHISPER_HALLUCINATIONS = (
+    "amara.org",
+    "napisy stworzone",
+    "napisy wykonane",
+    "napisy przygotowane",
+    "transkrypcja",
+    "dziękuję za obejrzenie",
+    "dziekuje za obejrzenie",
+    "dziękuję za oglądanie",
+    "dziekuje za ogladanie",
+    "subskryb",
+    "youtube.com",
+    "youtu.be",
+)
+
 
 def get_model(name: str, device: str, compute_type: str):
     cpu_threads = min(8, max(1, int(os.cpu_count() or 1))) if device == "cpu" else 0
@@ -52,6 +67,26 @@ def _looks_hallucinated(text: str, audio_seconds: float):
 
     if any(phrase in lower_clean for phrase in PROMPT_LEAK_PHRASES):
         return True, "prompt_leak"
+
+    if any(phrase in lower_clean for phrase in KNOWN_WHISPER_HALLUCINATIONS):
+        return True, "known_whisper_hallucination"
+
+    if "www." in lower_clean or "http://" in lower_clean or "https://" in lower_clean:
+        return True, "url_hallucination"
+
+    # Reject outputs that are effectively just one or more web addresses.
+    urlish_tokens = re.findall(
+        r"\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\b",
+        lower_clean,
+        flags=re.IGNORECASE,
+    )
+    if urlish_tokens:
+        non_url = lower_clean
+        for token in urlish_tokens:
+            non_url = non_url.replace(token, " ")
+        non_url = re.sub(r"[^a-ząćęłńóśźż0-9]+", " ", non_url, flags=re.IGNORECASE).strip()
+        if not non_url:
+            return True, "domain_only_hallucination"
 
     max_chars = max(120, int(audio_seconds * 35 + 80))
     if len(clean) > max_chars:
@@ -283,7 +318,7 @@ def transcribe_pcm16(
             # For company/contact keep the domain hint. For a weak problem
             # description, remove the prompt in pass 2 to reduce prompt bias.
             retry_prompt = initial_prompt
-            if mode == "problem":
+            if mode in ("problem", "company"):
                 retry_prompt = ""
 
             second_text, second_score = _transcribe_once(
