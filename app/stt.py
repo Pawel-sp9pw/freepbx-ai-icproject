@@ -272,6 +272,7 @@ def transcribe_pcm16(
     sample_rate=8000,
     initial_prompt="",
     mode="normal",
+    return_metadata=False,
 ):
     prepared_pcm, prepared_rate = _prepare_phone_audio(pcm, sample_rate)
 
@@ -287,6 +288,17 @@ def transcribe_pcm16(
 
         model = get_model(model_name, device, compute_type)
         audio_seconds = len(pcm) / 2 / float(sample_rate)
+        meta = {
+            "mode": mode,
+            "audio_seconds": round(audio_seconds, 3),
+            "model": model_name,
+            "pass1": None,
+            "pass2": None,
+            "retry": False,
+            "retry_reason": "",
+            "selected": "",
+            "selected_score": None,
+        }
 
         first_text, first_score = _transcribe_once(
             model,
@@ -298,6 +310,12 @@ def transcribe_pcm16(
             patience=1.10,
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
+        meta["pass1"] = {
+            "text": first_text,
+            "score": first_score,
+            "rejected": bool(first_bad),
+            "reason": first_reason or "",
+        }
         if first_bad:
             if first_text:
                 log.warning(
@@ -312,9 +330,18 @@ def transcribe_pcm16(
         # Confirmation remains deliberately conservative. Never use a second
         # decoding pass to manufacture a clearer "tak" from ambiguous audio.
         if mode == "confirmation":
-            return first_text
+            meta["selected"] = first_text
+            meta["selected_score"] = first_score if first_text else None
+            return meta if return_metadata else first_text
 
         if _needs_adaptive_retry(first_text, first_score, mode):
+            meta["retry"] = True
+            if not first_text:
+                meta["retry_reason"] = first_reason or "empty_or_rejected"
+            elif first_score is None:
+                meta["retry_reason"] = "no_confidence"
+            else:
+                meta["retry_reason"] = "low_confidence_or_short_field"
             # For company/contact keep the domain hint. For a weak problem
             # description, remove the prompt in pass 2 to reduce prompt bias.
             retry_prompt = initial_prompt
@@ -330,6 +357,12 @@ def transcribe_pcm16(
                 patience=1.30,
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
+            meta["pass2"] = {
+                "text": second_text,
+                "score": second_score,
+                "rejected": bool(second_bad),
+                "reason": second_reason or "",
+            }
             if second_bad:
                 if second_text:
                     log.warning(
@@ -357,8 +390,18 @@ def transcribe_pcm16(
                     f"{second_score:.3f}" if second_score is not None else "n/a",
                     selected,
                 )
-            return selected
+            selected_score = None
+            if selected:
+                if second_text and selected == second_text:
+                    selected_score = second_score
+                elif first_text and selected == first_text:
+                    selected_score = first_score
+            meta["selected"] = selected
+            meta["selected_score"] = selected_score
+            return meta if return_metadata else selected
 
-        return first_text
+        meta["selected"] = first_text
+        meta["selected_score"] = first_score if first_text else None
+        return meta if return_metadata else first_text
     finally:
         path.unlink(missing_ok=True)
