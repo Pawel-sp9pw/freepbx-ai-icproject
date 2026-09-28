@@ -71,6 +71,21 @@ def get_model(name: str, device: str, compute_type: str, num_workers: int = 1):
     return _models[key]
 
 
+def _contact_language_reason(text: str):
+    """Reject obvious English number-word transcripts in Polish phone mode."""
+    words = set(re.findall(r"[a-z]+", (text or "").lower()))
+    english_number_words = {
+        "zero", "one", "two", "three", "four", "five", "six", "seven",
+        "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+        "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+        "eighty", "ninety", "hundred",
+    }
+    if len(words & english_number_words) >= 2:
+        return "non_polish_contact"
+    return ""
+
+
 def _confidence_floor_reason(score, mode: str):
     """Reject extremely weak non-confirmation candidates.
 
@@ -370,6 +385,10 @@ def transcribe_pcm16(
             max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
+        if not first_bad and mode == "contact":
+            language_reason = _contact_language_reason(first_text)
+            if language_reason:
+                first_bad, first_reason = True, language_reason
         if not first_bad:
             confidence_reason = _confidence_floor_reason(first_score, mode)
             if confidence_reason:
@@ -437,6 +456,10 @@ def transcribe_pcm16(
                 max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
+            if not second_bad and mode == "contact":
+                language_reason = _contact_language_reason(second_text)
+                if language_reason:
+                    second_bad, second_reason = True, language_reason
             if not second_bad:
                 confidence_reason = _confidence_floor_reason(second_score, mode)
                 if confidence_reason:
