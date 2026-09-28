@@ -1025,7 +1025,6 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
                         self.mark_ticket_field("contact", "directory", None, True)
-                        self.mark_ticket_field("contact", "directory", None, True)
                 if context == "correction":
                     self.awaiting_correction = False
                     self.correction_field = ""
@@ -1495,7 +1494,6 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
                         self.mark_ticket_field("contact", "directory", None, True)
-                        self.mark_ticket_field("contact", "directory", None, True)
 
             elif self.correction_field == "description":
                 if looks_like_human_handoff_request(text):
@@ -1832,8 +1830,12 @@ class CallSession:
         )
         if matched_customer:
             self.ticket_data["company"] = matched_customer["name"]
+            self.company_trusted = True
+            self.mark_ticket_field("company", "directory", match_score, True)
             if not self.ticket_data.get("contact") and matched_customer.get("phone"):
                 self.ticket_data["contact"] = matched_customer["phone"]
+                self.contact_trusted = True
+                self.mark_ticket_field("contact", "directory", None, True)
 
         # If we are clearly asking for a problem and the caller gives a real
         # utterance, accept it as the description even if the LLM is too strict.
