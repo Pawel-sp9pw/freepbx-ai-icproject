@@ -1,9 +1,50 @@
 import io
 import wave
+from collections import OrderedDict
 
 import httpx
 import numpy as np
 from scipy.signal import resample_poly
+
+
+# Most prompts are repeated verbatim across calls. Caching the final 8 kHz PCM
+# avoids another Piper HTTP request, WAV decode and resample for every caller.
+# The cache is deliberately small and process-local; dynamic summaries naturally
+# age out while common prompts stay hot.
+_TTS_CACHE = OrderedDict()
+_TTS_CACHE_MAX_ITEMS = 64
+_TTS_CACHE_MAX_BYTES = 24 * 1024 * 1024
+_tts_cache_bytes = 0
+
+
+def _cache_get(key):
+    pcm = _TTS_CACHE.get(key)
+    if pcm is not None:
+        _TTS_CACHE.move_to_end(key)
+    return pcm
+
+
+def _cache_put(key, pcm: bytes):
+    global _tts_cache_bytes
+    if not pcm or len(pcm) > _TTS_CACHE_MAX_BYTES // 2:
+        return
+    old = _TTS_CACHE.pop(key, None)
+    if old is not None:
+        _tts_cache_bytes -= len(old)
+    _TTS_CACHE[key] = pcm
+    _tts_cache_bytes += len(pcm)
+    while (
+        len(_TTS_CACHE) > _TTS_CACHE_MAX_ITEMS
+        or _tts_cache_bytes > _TTS_CACHE_MAX_BYTES
+    ):
+        _, removed = _TTS_CACHE.popitem(last=False)
+        _tts_cache_bytes -= len(removed)
+
+
+def clear_tts_cache():
+    global _tts_cache_bytes
+    _TTS_CACHE.clear()
+    _tts_cache_bytes = 0
 
 
 def _pcm_to_int16(pcm: bytes, sampwidth: int) -> np.ndarray:
@@ -33,6 +74,11 @@ def _pcm_to_int16(pcm: bytes, sampwidth: int) -> np.ndarray:
 
 
 async def synthesize_pcm8k(piper_url: str, text: str, voice: str | None = None):
+    cache_key = (str(piper_url or "").rstrip("/"), str(voice or ""), str(text or ""))
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     payload = {"text": text}
     if voice:
         payload["voice"] = voice
@@ -57,4 +103,6 @@ async def synthesize_pcm8k(piper_url: str, text: str, voice: str | None = None):
         samples = resample_poly(samples.astype(np.float32), 8000, rate)
         samples = np.clip(np.rint(samples), -32768, 32767).astype(np.int16)
 
-    return samples.astype("<i2", copy=False).tobytes()
+    result = samples.astype("<i2", copy=False).tobytes()
+    _cache_put(cache_key, result)
+    return result
