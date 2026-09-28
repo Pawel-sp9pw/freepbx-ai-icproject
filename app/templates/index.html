@@ -636,6 +636,22 @@ PersistentKeepalive = 25"></textarea>
     }
   }
 
+  function formatMatchDebugForClipboard(content){
+    try{
+      const d=JSON.parse(content || '{}');
+      const score=(d.score===null || d.score===undefined)?'n/a':Number(d.score).toFixed(3);
+      return '[MATCH '+String(d.source || 'unknown')+'] input_company='+JSON.stringify(d.input_company || '')+
+        ' normalized='+JSON.stringify(d.normalized_company || '')+
+        ' contact='+JSON.stringify(d.input_contact || '')+
+        ' matched='+(d.matched?'yes':'no')+
+        ' matched_name='+JSON.stringify(d.matched_name || '')+
+        ' score='+score+
+        ' trusted(company/contact)='+(d.company_trusted?'yes':'no')+'/'+(d.contact_trusted?'yes':'no');
+    }catch(e){
+      return '[MATCH raw] '+String(content || '');
+    }
+  }
+
   function callClipboardText(c, includeDebug){
     const lines=[];
     lines.push('Rozmowa: '+(c.call_id || '—'));
@@ -651,6 +667,10 @@ PersistentKeepalive = 25"></textarea>
     for(const m of (c.messages || [])){
       if(m.role==='stt_debug'){
         if(includeDebug) lines.push(formatSttDebugForClipboard(m.content));
+        continue;
+      }
+      if(m.role==='match_debug'){
+        if(includeDebug) lines.push(formatMatchDebugForClipboard(m.content));
         continue;
       }
       if(m.role==='user') lines.push('Klient: '+m.content);
@@ -809,6 +829,23 @@ PersistentKeepalive = 25"></textarea>
             html+='<details class="msg" data-stt-key="'+esc(sttKey)+'"'+openAttr+' ontoggle="rememberSttDetail(this)"><summary><strong>Diagnostyka STT</strong></summary><pre>'+esc(m.content)+'</pre></details>';
             sttIndex++;
           }
+          continue;
+        }
+        if(m.role==='match_debug'){
+          let summary='Dopasowanie klienta';
+          let details=String(m.content || '');
+          try{
+            const d=JSON.parse(m.content || '{}');
+            const score=(d.score===null || d.score===undefined)?'n/a':Number(d.score).toFixed(3);
+            summary='MATCH · '+esc(d.source || 'unknown')+' · '+(d.matched?'dopasowano':'brak dopasowania')+' · '+esc(score);
+            details='wejściowa firma: '+(d.input_company || '—')+
+              '\nznormalizowana: '+(d.normalized_company || '—')+
+              '\nnumer: '+(d.input_contact || '—')+
+              '\ndopasowano: '+(d.matched_name || '—')+
+              '\nscore: '+score+
+              '\nzaufanie firma/telefon: '+(d.company_trusted?'tak':'nie')+'/'+(d.contact_trusted?'tak':'nie');
+          }catch(e){}
+          html+='<details class="msg" style="background:#f7f7f7"><summary><strong>'+summary+'</strong></summary><pre style="white-space:pre-wrap;margin:8px 0 0 0">'+esc(details)+'</pre></details>';
           continue;
         }
         const cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'');
