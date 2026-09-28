@@ -277,9 +277,12 @@ def looks_like_ticket_cancellation(text: str):
     patterns = (
         r"\bnie\s+(?:prosz[ęe]\s+)?(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|tw[oó]rzcie|rejestruj|zapisuj)\b.*\bzg[łl]oszen",
         r"\bprosz[ęe]\s+(?:o\s+)?nie\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl]oszen",
-        r"\b(anuluj|anulowa[ćc]|wycofuj[ęe]|wycofaj|rezygnuj[ęe])\b.*\bzg[łl]oszen",
+        r"\b(anuluj|anulowa[ćc]|wycofuj[ęe]|wycofaj|rezygnuj[ęe]|prozygnuj[ęe])\b.*\bzg[łl]oszen",
+        r"\bzg[łl]oszeni[ea]\b.*\b(?:ju[żz]\s+)?nie\s+(?:jest\s+)?potrzebn",
         r"\bzg[łl]oszenie\b.*\b(niepotrzebne|nieaktualne|anuluj|wycofaj)\b",
-        r"\bju[żz]\s+(?:zacz[ęe][łl]o\s+)?dzia[łl]a[ćc]?\b.*\bnie\s+.*\bzg[łl]oszen",
+        r"\bju[żz]\s+(?:zacz[ęe][łl]o\s+)?dzia[łl]a[ćc]?\b.*\b(?:nie|unie)\s+.*\bzg[łl]oszen",
+        r"\bprosz[ęe]\b.*\b(?:nie|unie)\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl]oszen",
+        r"\b(?:anul|omu[łl])\w*\b.*\bzg[łl]oszen",
         r"\bproblem\s+(?:ju[żz]\s+)?(?:rozwi[aą]zany|znikn[aą][łl]|ust[aą]pi[łl])\b.*\bnie\s+.*\bzg[łl]oszen",
     )
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
