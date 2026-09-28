@@ -218,14 +218,17 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(h.session.confirmation_pending)
         self.assertTrue(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
 
-    async def test_company_phone_recovery_uses_contact_stt_mode_and_prompt(self):
+    async def test_company_phone_recovery_uses_contact_stt_mode_and_hotwords(self):
         h = ConversationHarness()
         await h.start()
         h.session.awaiting_company = True
         h.session.awaiting_company_phone_recovery = True
 
         self.assertEqual(h.session.stt_mode_for_state(), "contact")
-        self.assertIn("numer telefonu", h.session.stt_prompt_for_state().lower())
+        self.assertEqual(h.session.stt_prompt_for_state(), "")
+        hotwords = h.session.stt_hotwords_for_state().lower()
+        self.assertIn("zero", hotwords)
+        self.assertIn("dziewięć", hotwords)
 
     async def test_company_phone_recovery_non_number_does_not_become_company(self):
         h = ConversationHarness()
@@ -262,12 +265,12 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         for sample in samples:
             self.assertTrue(audiosocket.looks_like_invalid_company_name(sample), sample)
 
-    async def test_company_prompt_is_sentence_not_keyword_list(self):
+    async def test_company_state_does_not_use_sentence_initial_prompt(self):
         h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Pizzeria Roma", "phone": "600100200"}]
         await h.start()
-        prompt = h.session.stt_prompt_for_state()
-        self.assertEqual(prompt, "Dzwoniący podaje nazwę swojej firmy po polsku.")
-        self.assertNotIn("pizzeria, przychodnia", prompt.lower())
+        self.assertEqual(h.session.stt_prompt_for_state(), "")
+        self.assertIn("Pizzeria Roma", h.session.stt_hotwords_for_state())
 
     async def test_whisper_url_hallucination_is_not_accepted_as_company(self):
         h = ConversationHarness()
