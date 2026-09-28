@@ -13,6 +13,28 @@ from app.audiosocket import (
 
 
 class AudioSocketRegressionTests(unittest.TestCase):
+
+    def test_company_noise_and_repetition_are_rejected(self):
+        samples = [
+            "Nie, nie, nie, nie, nie, nie, nie, nie, nie, nie.",
+            "Do zobaczenia.",
+            "No, no, no, to jest...",
+            "Dziękuję.",
+            "tak",
+        ]
+        for sample in samples:
+            self.assertTrue(
+                audiosocket.looks_like_invalid_company_name(sample),
+                sample,
+            )
+
+    def test_normal_company_names_are_not_rejected_as_noise(self):
+        for sample in ("Przychodnia Testowa Beta", "Apteka Testowa Pod Dębem", "No Problem IT"):
+            self.assertFalse(
+                audiosocket.looks_like_invalid_company_name(sample),
+                sample,
+            )
+
     def test_parse_customer_directory(self):
         directory = parse_customer_directory(
             "Paweł | 792 032 104\nPizzeria Roma | +48 600-100-200\n"
