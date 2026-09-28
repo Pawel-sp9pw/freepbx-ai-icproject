@@ -567,6 +567,74 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.ticket_data["contact"], "608411319")
         self.assertTrue(h.session.awaiting_problem)
 
+    async def test_confirmation_empty_twice_falls_back_to_dtmf(self):
+        h = ConversationHarness()
+        h.session.company_confirmation_pending = True
+        h.session.company_candidate = "Zelnik"
+        h.session.awaiting_company = False
+        empty = {
+            "selected": "", "selected_score": None, "mode": "confirmation",
+            "audio_seconds": 0.82, "pass1": {"text": "", "score": None, "rejected": True, "reason": "empty"},
+            "pass2": None, "retry": False, "retry_reason": "",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=empty), patch.object(audiosocket, "add_message", return_value=None):
+            await h.session.process_utterance(b"\x00" * int(16000 * 0.82))
+            await h.session.process_utterance(b"\x00" * int(16000 * 0.82))
+        self.assertEqual(h.session.awaiting_confirmation_dtmf, "company")
+        self.assertTrue(any("nacisnąć 1" in x.lower() for x in h.spoken))
+
+    async def test_company_confirmation_dtmf_two_rejects(self):
+        h = ConversationHarness()
+        h.session.company_confirmation_pending = True
+        h.session.company_candidate = "Zelnik"
+        h.session.awaiting_company = False
+        h.session.awaiting_confirmation_dtmf = "company"
+        await h.session.handle_dtmf(b"2")
+        self.assertTrue(h.session.awaiting_company)
+        self.assertEqual(h.session.company_rejection_total, 1)
+
+    async def test_phone_recovery_bad_numbers_switch_to_dtmf(self):
+        h = ConversationHarness()
+        h.session.awaiting_company = True
+        h.session.awaiting_company_phone_recovery = True
+        h.session.company_rejection_total = 2
+        h.session.customer_directory = [{"name": "Tomek", "phone": "790205140"}]
+        await h.user("790205141", score=-0.2)
+        await h.user("79020514", score=-0.2)
+        self.assertTrue(h.session.awaiting_contact_dtmf)
+        self.assertEqual(h.session.dtmf_contact_context, "company_recovery")
+
+    async def test_cancellation_suspected_blocks_hangup_autosave_flag(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company":"X","contact":"600100200","description":"Problem"}
+        await h.user("Złożenie jest niepotrzebne", score=-0.3)
+        self.assertTrue(h.session.cancellation_suspected)
+
+    async def test_do_zobaczenia_is_global_goodbye(self):
+        h = ConversationHarness()
+        await h.start()
+        await h.user("Do zobaczenia", score=-0.1)
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
+
+    async def test_invalid_company_second_decode_can_recover_goodbye(self):
+        h = ConversationHarness()
+        await h.start()
+        first = {
+            "selected": "Dzień dobry. Dzień dobry.", "selected_score": -0.7, "mode":"company",
+            "audio_seconds":1.5, "pass1":{"text":"Dzień dobry. Dzień dobry.","score":-0.7,"rejected":False,"reason":""},
+            "pass2":None,"retry":False,"retry_reason":""
+        }
+        second = {
+            "selected":"do widzenia","selected_score":-0.1,"mode":"confirmation",
+            "audio_seconds":1.5,"pass1":{"text":"do widzenia","score":-0.1,"rejected":False,"reason":""},
+            "pass2":None,"retry":False,"retry_reason":""
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", side_effect=[first, second]), patch.object(audiosocket, "add_message", return_value=None):
+            await h.session.process_utterance(b"\x00"*24000)
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
+
     async def test_second_failed_phone_attempt_switches_to_dtmf(self):
         h = ConversationHarness()
         h.session.ticket_data = {"company": "Alfatest"}
