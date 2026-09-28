@@ -4,6 +4,7 @@ import re
 from collections import Counter
 from pathlib import Path
 import tempfile
+import threading
 import wave
 
 import numpy as np
@@ -12,6 +13,7 @@ from faster_whisper import WhisperModel
 
 log = logging.getLogger("stt")
 _models = {}
+_models_lock = threading.Lock()
 
 PROMPT_LEAK_PHRASES = (
     "oczekiwane odpowiedzi",
@@ -52,27 +54,36 @@ def get_model(name: str, device: str, compute_type: str, num_workers: int = 1):
     total_cpu = max(1, int(os.cpu_count() or 1))
     cpu_threads = min(8, max(1, total_cpu // workers)) if device == "cpu" else 0
     key = (name, device, compute_type, cpu_threads, workers)
-    if key not in _models:
-        kwargs = {
-            "device": device,
-            "compute_type": compute_type,
-        }
-        if device == "cpu":
-            # CTranslate2 can execute several transcribe calls concurrently.
-            # Split CPU threads between workers instead of letting one call
-            # monopolize every vCPU.
-            kwargs["cpu_threads"] = cpu_threads
-            kwargs["num_workers"] = workers
-        _models[key] = WhisperModel(name, **kwargs)
-        log.info(
-            "Loaded Whisper model %s on %s (%s), workers=%s, cpu_threads_per_worker=%s",
-            name,
-            device,
-            compute_type,
-            workers if device == "cpu" else "n/a",
-            cpu_threads if device == "cpu" else "n/a",
-        )
-    return _models[key]
+    model = _models.get(key)
+    if model is not None:
+        return model
+
+    # Startup pre-warm and a first incoming call may race. Serialize model
+    # construction so we never load two multi-GB model instances at once.
+    with _models_lock:
+        model = _models.get(key)
+        if model is None:
+            kwargs = {
+                "device": device,
+                "compute_type": compute_type,
+            }
+            if device == "cpu":
+                # CTranslate2 can execute several transcribe calls concurrently.
+                # Split CPU threads between workers instead of letting one call
+                # monopolize every vCPU.
+                kwargs["cpu_threads"] = cpu_threads
+                kwargs["num_workers"] = workers
+            model = WhisperModel(name, **kwargs)
+            _models[key] = model
+            log.info(
+                "Loaded Whisper model %s on %s (%s), workers=%s, cpu_threads_per_worker=%s",
+                name,
+                device,
+                compute_type,
+                workers if device == "cpu" else "n/a",
+                cpu_threads if device == "cpu" else "n/a",
+            )
+    return model
 
 
 def _looks_like_repeated_confirmation(text: str):
