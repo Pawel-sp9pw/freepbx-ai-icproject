@@ -1800,7 +1800,6 @@ async def handle_client(reader, writer):
                     caller_digits,
                     session.customer_directory,
                 )
-                session.record_customer_match("callerid", "", caller_digits, matched_customer, match_score)
                 if matched_customer:
                     session.caller_matched_customer = True
                     session.company_trusted = True
@@ -1812,6 +1811,7 @@ async def handle_client(reader, writer):
                     # Preserve the actual inbound CallerID separately from any
                     # contact number later recognized or corrected by STT.
                     session.ticket_data["caller"] = caller_digits
+                session.record_customer_match("callerid", "", caller_digits, matched_customer, match_score)
                 log.info(
                     "[%s] CallerID registered: %s%s",
                     call_id,
