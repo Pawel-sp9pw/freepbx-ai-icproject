@@ -248,6 +248,12 @@
           <div class="muted">Niższa wartość = mniej pytań. Domyślnie -0.55.</div>
         </div>
         <div>
+          <label>Próg zaufania do numeru telefonu
+            <input type="number" step="0.05" min="-2" max="0" name="contact_auto_accept_logprob" value="{{s.contact_auto_accept_logprob}}">
+          </label>
+          <div class="muted">Numer rozpoznany przez STT jest uznawany za pewny dopiero od tego wyniku. CallerID i dopasowanie do słownika są zaufane niezależnie. Domyślnie -0.30.</div>
+        </div>
+        <div>
           <label>Automatyczne przyjęcie opisu problemu
             <input type="number" step="0.05" min="-2" max="0" name="problem_auto_accept_logprob" value="{{s.problem_auto_accept_logprob}}">
           </label>
