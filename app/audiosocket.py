@@ -1175,8 +1175,6 @@ class CallSession:
 
         if not self.awaiting_contact_dtmf:
             return
-        except Exception:
-            chars = ""
         for ch in chars:
             if ch.isdigit():
                 if len(self.dtmf_contact_buffer) < 15:
