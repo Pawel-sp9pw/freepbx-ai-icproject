@@ -257,6 +257,23 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.saved, [])
         self.assertTrue(any("do widzenia" in x.lower() for x in h.spoken))
 
+    async def test_rejected_company_candidate_is_not_reused_without_confirmation(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Firma Nowoczes", score=-0.80)
+        self.assertTrue(h.session.company_confirmation_pending)
+        await h.user("nie", score=-0.10)
+
+        self.assertNotIn("company", h.session.ticket_data)
+        self.assertIn("nowoczes", h.session.rejected_company_names)
+
+        # Even a later high-confidence repeat of the same rejected candidate
+        # must not silently become the company name.
+        await h.user("Firma Nowoczes", score=-0.20)
+        self.assertTrue(h.session.company_confirmation_pending)
+        self.assertNotIn("company", h.session.ticket_data)
+
     async def test_uncertain_company_rejected_and_reentered(self):
         h = ConversationHarness()
         await h.start()
