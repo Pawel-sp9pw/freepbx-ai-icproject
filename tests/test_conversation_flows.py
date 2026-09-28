@@ -635,6 +635,40 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(h.session.closed)
         self.assertEqual(h.session.final_status, "caller_ended")
 
+    async def test_three_unusable_company_utterances_switch_to_phone_recovery(self):
+        h = ConversationHarness()
+        await h.start()
+        rejected = {
+            "selected": "", "selected_score": None, "mode": "company",
+            "audio_seconds": 1.4,
+            "pass1": {"text": "Dzielnik", "score": -1.2, "rejected": True, "reason": "low_confidence"},
+            "pass2": {"text": "Cześć", "score": -1.1, "rejected": True, "reason": "low_confidence"},
+            "retry": True, "retry_reason": "low_confidence",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=rejected), patch.object(audiosocket, "add_message", return_value=None):
+            await h.session.process_utterance(b"\x00" * int(16000 * 1.4))
+            await h.session.process_utterance(b"\x00" * int(16000 * 1.4))
+            await h.session.process_utterance(b"\x00" * int(16000 * 1.4))
+
+        self.assertTrue(h.session.awaiting_company_phone_recovery)
+        self.assertEqual(h.session.company_recognition_failures, 3)
+        self.assertTrue(any("numer telefonu kontaktowego" in x.lower() for x in h.spoken))
+
+    async def test_short_company_prompt_echo_does_not_count_as_company_failure(self):
+        h = ConversationHarness()
+        await h.start()
+        rejected = {
+            "selected": "", "selected_score": None, "mode": "company",
+            "audio_seconds": 0.6,
+            "pass1": {"text": "Dzwoniący podaje nazwę swojej firmy", "score": -0.2, "rejected": True, "reason": "prompt_leak"},
+            "pass2": None, "retry": False, "retry_reason": "short_rejected_audio",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=rejected), patch.object(audiosocket, "add_message", return_value=None):
+            await h.session.process_utterance(b"\x00" * int(16000 * 0.6))
+
+        self.assertEqual(h.session.company_recognition_failures, 0)
+        self.assertFalse(h.session.awaiting_company_phone_recovery)
+
     async def test_second_failed_phone_attempt_switches_to_dtmf(self):
         h = ConversationHarness()
         h.session.ticket_data = {"company": "Alfatest"}
