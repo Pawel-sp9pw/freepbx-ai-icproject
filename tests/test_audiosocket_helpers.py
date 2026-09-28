@@ -14,6 +14,23 @@ from app.audiosocket import (
 
 class AudioSocketRegressionTests(unittest.TestCase):
 
+    def test_phone_parser_accepts_observed_ordinal_variants(self):
+        self.assertEqual(
+            audiosocket.extract_phone_digits(
+                "Pięćset pięć, jedenasty, osiemdziesiąt cztery, osiąnasty.",
+                "pl",
+            ),
+            "505118418",
+        )
+        self.assertEqual(
+            audiosocket.extract_phone_digits(
+                "Osiemset dwudziesta sześć pięćdziesiąt dziewięć dwudziesta osiem dziewięćdziesiąt pięć.",
+                "pl",
+            ),
+            "826592895",
+        )
+
+
     def test_company_noise_and_repetition_are_rejected(self):
         samples = [
             "Nie, nie, nie, nie, nie, nie, nie, nie, nie, nie.",
