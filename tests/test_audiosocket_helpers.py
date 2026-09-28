@@ -5,6 +5,7 @@ from app.audiosocket import (
     clean_company_display_name,
     extract_phone_digits,
     looks_like_invalid_company_name,
+    looks_like_possible_cancellation,
     looks_like_ticket_cancellation,
     match_customer,
     matches_confirmation_phrase,
