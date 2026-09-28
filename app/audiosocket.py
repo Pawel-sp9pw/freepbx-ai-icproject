@@ -281,7 +281,7 @@ def looks_like_invalid_company_name(value: str):
         "tak", "nie", "dobrze", "dziękuję", "dziekuje", "bardzo dziękuję",
         "bardzo dziekuje", "dzień dobry", "dzien dobry", "cześć", "czesc",
         "do zobaczenia", "do widzenia", "co to jest", "dzwonię", "dzwonie",
-        "no", "to jest", "yyy", "yyy yyy", "hmm",
+        "szanowny", "no", "to jest", "yyy", "yyy yyy", "hmm",
     }
     if normalized in company_only_noise:
         return True
@@ -296,6 +296,13 @@ def looks_like_invalid_company_name(value: str):
         # Filler-heavy fragments such as "no, no, no, to jest".
         filler_words = {"no", "to", "jest", "yyy", "hmm"}
         if len(words) >= 3 and all(word in filler_words for word in words):
+            return True
+        polite_or_speech_words = {
+            "bardzo", "dziekuje", "dziękuję", "dzwonie", "dzwonię",
+            "dzien", "dzień", "dobry", "czesc", "cześć", "szanowny",
+            "co", "to", "jest",
+        }
+        if words and all(word in polite_or_speech_words for word in words):
             return True
 
     if "www." in normalized or "http://" in normalized or "https://" in normalized:
@@ -640,6 +647,7 @@ class CallSession:
         self.company_confirmation_context = ""
         self.company_candidate_phone = ""
         self.rejected_company_names = set()
+        self.rejected_company_counts = {}
         self.early_problem_score = None
         self.company_trusted = False
         self.contact_trusted = False
@@ -761,6 +769,23 @@ class CallSession:
 
     async def finalize_ticket(self, uncertain=False, silent=False, warning_text=""):
         ticket = dict(self.ticket_data)
+
+        # Last-resort guard: never send a known prompt/noise transcript as a
+        # company name, even if an unusual path bypassed earlier validation.
+        raw_company = str(ticket.get("company", "") or "").strip()
+        if raw_company and looks_like_invalid_company_name(raw_company):
+            ticket["company"] = "Nazwa firmy nierozpoznana – zweryfikować"
+            uncertain = True
+            self.ticket_field_meta["company"] = {
+                "source": "invalid_stt_guard",
+                "trusted": False,
+            }
+            warning_text = (
+                warning_text.strip() + "\n"
+                if warning_text.strip()
+                else ""
+            ) + "UWAGA: Nazwa firmy nie została wiarygodnie rozpoznana i wymaga weryfikacji."
+
         if uncertain:
             warning = warning_text.strip() or (
                 "UWAGA: Agent głosowy nie zdołał jednoznacznie potwierdzić danych po 3 próbach poprawki. "
@@ -1082,6 +1107,21 @@ class CallSession:
             now = time.monotonic()
             audio_seconds = len(pcm) / 16000.0
             retry_reason = stt_result.get("retry_reason", "") if isinstance(stt_result, dict) else ""
+
+            # Rejected phone speech is still a failed contact attempt. Do not
+            # allow a different hallucination class to create an infinite loop.
+            if self.awaiting_contact and audio_seconds >= 0.50 and retry_reason != "short_rejected_audio":
+                self.contact_attempts += 1
+                if self.contact_attempts >= 2:
+                    self.awaiting_contact_dtmf = True
+                    self.dtmf_contact_buffer = ""
+                    self.dtmf_contact_context = "initial"
+                    self.stt_misses = 0
+                    await self.say(
+                        "Nie udało mi się pewnie rozpoznać numeru. "
+                        "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
+                    )
+                    return
             # Silence is allowed only for a genuinely short residual prompt-leak
             # immediately after TTS. Never let a stale/misclassified retry_reason
             # suppress a real 1-2 second caller utterance.
@@ -1260,6 +1300,9 @@ class CallSession:
                 rejected_normalized = normalize_company(rejected_candidate)
                 if rejected_normalized:
                     self.rejected_company_names.add(rejected_normalized)
+                    self.rejected_company_counts[rejected_normalized] = (
+                        self.rejected_company_counts.get(rejected_normalized, 0) + 1
+                    )
                 if (
                     rejected_normalized
                     and normalize_company(str(self.ticket_data.get("company", "") or "")) == rejected_normalized
@@ -1271,13 +1314,26 @@ class CallSession:
                 self.company_candidate_score = None
                 self.company_confirmation_context = ""
                 self.company_candidate_phone = ""
+                rejected_count = self.rejected_company_counts.get(rejected_normalized, 0)
                 if context == "correction":
                     self.awaiting_correction = True
                     self.correction_field = "company"
-                    await self.say("Dobrze. Proszę podać poprawną nazwę firmy jeszcze raz.")
+                    if rejected_count >= 2:
+                        await self.say(
+                            "Ta nazwa została już dwa razy odrzucona. "
+                            "Proszę podać inną nazwę firmy."
+                        )
+                    else:
+                        await self.say("Dobrze. Proszę podać poprawną nazwę firmy jeszcze raz.")
                 else:
                     self.awaiting_company = True
-                    await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
+                    if rejected_count >= 2:
+                        await self.say(
+                            "Ta nazwa została już dwa razy odrzucona. "
+                            "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
+                        )
+                    else:
+                        await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
                 return
 
             await self.say(
@@ -1337,33 +1393,8 @@ class CallSession:
                     )
                 return
 
-            # Ambiguous confirmation must never create a ticket.
-            # LLM may help detect a correction/negative intent, but it is not
-            # allowed to turn an unclear transcript into a positive confirmation.
-            interpreted = await self.interpret_fallback("potwierdzenie danych tak/nie", text)
-            if interpreted.get("blocked"):
-                await self.refuse_out_of_scope()
-                return
-            intent = str(interpreted.get("intent", "")).lower()
-
-            if intent in ("confirm_no", "correction"):
-                self.confirmation_pending = False
-                self.confirmation_misses = 0
-                self.awaiting_correction = True
-                self.awaiting_company = False
-                self.awaiting_contact = False
-                self.awaiting_problem = False
-                if self.caller_matched_customer:
-                    self.correction_field = "description"
-                    await self.say("Dobrze. Proszę podać poprawny opis problemu.")
-                else:
-                    self.correction_field = ""
-                    await self.say(
-                        "Dobrze. Proszę podać tylko dane, które mam poprawić: "
-                        "nazwę firmy, numer kontaktowy albo opis problemu."
-                    )
-                return
-
+            # Ambiguous confirmation must never be guessed by the LLM. A
+            # misheard "tak" must not turn into a correction request.
             self.confirmation_misses += 1
             if self.confirmation_misses >= 1:
                 self.confirmation_misses = 0
@@ -1378,38 +1409,21 @@ class CallSession:
         # 2) next utterance becomes the replacement value.
         if self.awaiting_correction:
             if not self.correction_field:
-                if any(x in normalized for x in ("firma", "nazwa firmy", "nazwa klienta")):
+                words = set(re.findall(r"[a-ząćęłńóśźż]+", normalized, flags=re.IGNORECASE))
+                company_choice = any(word.startswith(("firm", "nazw")) for word in words)
+                contact_choice = any(word.startswith(("numer", "telefon", "kontakt")) for word in words)
+                description_choice = any(word.startswith(("opis", "problem")) for word in words)
+                choices = sum((company_choice, contact_choice, description_choice))
+
+                if choices == 1 and company_choice:
                     self.correction_field = "company"
                     await self.say("Proszę podać poprawną nazwę firmy.")
                     return
-
-                if any(x in normalized for x in ("numer", "telefon", "kontakt", "numer kontaktowy")):
+                if choices == 1 and contact_choice:
                     self.correction_field = "contact"
                     await self.say("Proszę podać poprawny numer telefonu kontaktowego.")
                     return
-
-                if any(x in normalized for x in ("opis", "opis problemu", "problem")):
-                    self.correction_field = "description"
-                    await self.say("Proszę podać poprawny opis problemu.")
-                    return
-
-                interpreted = await self.interpret_fallback(
-                    "wybór pola do poprawy: firma, numer kontaktowy albo opis problemu",
-                    text,
-                )
-                if interpreted.get("blocked"):
-                    await self.refuse_out_of_scope()
-                    return
-                intent = str(interpreted.get("intent", "")).lower()
-                if interpreted.get("company"):
-                    self.correction_field = "company"
-                    await self.say("Proszę podać poprawną nazwę firmy.")
-                    return
-                if interpreted.get("contact"):
-                    self.correction_field = "contact"
-                    await self.say("Proszę podać poprawny numer telefonu kontaktowego.")
-                    return
-                if interpreted.get("description") or intent == "problem":
+                if choices == 1 and description_choice:
                     self.correction_field = "description"
                     await self.say("Proszę podać poprawny opis problemu.")
                     return
@@ -1540,6 +1554,21 @@ class CallSession:
             phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             company_text = clean_company_display_name(text) or text.strip()
 
+            if phone:
+                phone_customer, phone_score = match_customer("", phone, self.customer_directory)
+                if phone_customer:
+                    self.ticket_data["company"] = phone_customer["name"]
+                    self.ticket_data["contact"] = phone_customer.get("phone") or phone
+                    self.company_trusted = True
+                    self.contact_trusted = True
+                    self.mark_ticket_field("company", "directory", phone_score, True)
+                    self.mark_ticket_field("contact", "directory", None, True)
+                    self.record_customer_match("company_recovery_phone", "", phone, phone_customer, phone_score)
+                    self.awaiting_company = False
+                    self.awaiting_problem = True
+                    await self.say("Dziękuję. Proszę opisać problem.")
+                    return
+
             if looks_like_invalid_company_name(company_text):
                 await self.say(
                     "Nie udało mi się wiarygodnie rozpoznać nazwy firmy. "
@@ -1598,7 +1627,16 @@ class CallSession:
                     selected_score is not None
                     and float(selected_score) < confirm_threshold
                 )
-                was_rejected = normalize_company(company_text) in self.rejected_company_names
+                normalized_candidate = normalize_company(company_text)
+                was_rejected = normalized_candidate in self.rejected_company_names
+                rejected_count = self.rejected_company_counts.get(normalized_candidate, 0)
+                if was_rejected and rejected_count >= 2:
+                    self.awaiting_company = True
+                    await self.say(
+                        "Ta nazwa była już odrzucona. "
+                        "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
+                    )
+                    return
                 if low_confidence or was_rejected:
                     self.company_confirmation_pending = True
                     self.company_candidate = company_text
