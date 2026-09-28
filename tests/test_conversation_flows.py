@@ -105,6 +105,24 @@ async def _no_sleep(*args, **kwargs):
 
 
 class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_problem_state_prompt_does_not_include_generic_company_phone_prompt(self):
+        h = ConversationHarness()
+        h.session.settings["stt_prompt"] = (
+            "Rozmowa telefoniczna z polskim serwisem IT. "
+            "Dzwoniący podaje nazwę firmy, numer telefonu lub opis problemu."
+        )
+        h.session.ticket_data = {"company": "Marcin", "contact": "608411319"}
+        h.session.caller_matched_customer = True
+        h.session.company_trusted = True
+        h.session.contact_trusted = True
+
+        await h.start()
+        prompt = h.session.stt_prompt_for_state()
+
+        self.assertIn("opisuje problem techniczny", prompt.lower())
+        self.assertNotIn("podaje nazwę firmy", prompt.lower())
+        self.assertNotIn("numer telefonu lub opis problemu", prompt.lower())
+
     async def test_recognized_caller_problem_yes_creates_ticket(self):
         h = ConversationHarness()
         h.session.ticket_data = {
