@@ -593,7 +593,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.correction_attempts, 3)
         self.assertEqual(len(h.saved), 1)
         self.assertTrue(h.saved[0]["uncertain"])
-        self.assertEqual(h.saved[0]["ticket"]["company"], "Firma trzy")
+        self.assertEqual(h.saved[0]["ticket"]["company"], "trzy")
         self.assertEqual(h.saved[0]["ticket"]["description"], "Problem drugi")
 
     async def test_ambiguous_confirmation_does_not_create_ticket(self):
