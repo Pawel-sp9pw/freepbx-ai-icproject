@@ -112,6 +112,28 @@ class AdaptiveSTTTests(unittest.TestCase):
         selected = stt._choose_candidate("Pizzeria", -0.20, "Fitzseria", -0.50)
         self.assertEqual(selected, "Pizzeria")
 
+    def test_paraphrased_generic_prompt_leak_is_rejected(self):
+        model = FakeModel([
+            ("Dzwoniący podaje nazwę firmy, numer telefonu lub usterkę po polsku.", -0.50),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 9920,  # ~0.62 s at 8 kHz / 16 bit
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Rozmowa telefoniczna z polskim serwisem IT. Dzwoniący podaje nazwę firmy, numer telefonu lub opis problemu.",
+                mode="problem",
+                return_metadata=True,
+            )
+
+        self.assertEqual(result["selected"], "")
+        self.assertEqual(result["pass1"]["reason"], "prompt_leak")
+        self.assertEqual(result["retry_reason"], "short_rejected_audio")
+        self.assertFalse(result["retry"])
+        self.assertEqual(len(model.calls), 1)
+
     def test_short_prompt_leak_skips_second_pass(self):
         model = FakeModel([
             ("Dzwoniący podaje nazwę swojej firmy po polsku. " * 5, -0.10),
