@@ -1,5 +1,9 @@
+import io
 import unittest
+import wave
+from unittest.mock import patch
 
+from app import tts
 from app.audiosocket import (
     apply_llm_fill_only,
     clean_company_display_name,
@@ -239,6 +243,60 @@ class AudioSocketRegressionTests(unittest.TestCase):
         result = apply_llm_fill_only(ticket, {"company": "", "description": None})
         self.assertEqual(result["company"], "Paweł")
         self.assertEqual(result["description"], "Problem")
+
+
+class _FakeTTSResponse:
+    def __init__(self, content):
+        self.content = content
+
+    def raise_for_status(self):
+        return None
+
+
+class _FakeTTSClient:
+    calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, *args, **kwargs):
+        type(self).calls += 1
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(8000)
+            w.writeframes(b"\x01\x00" * 800)
+        return _FakeTTSResponse(buf.getvalue())
+
+
+class TTSCacheRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        tts.clear_tts_cache()
+        _FakeTTSClient.calls = 0
+
+    async def test_repeated_prompt_is_synthesized_once(self):
+        with patch.object(tts.httpx, "AsyncClient", _FakeTTSClient):
+            first = await tts.synthesize_pcm8k(
+                "http://piper", "Dziękuję. Proszę opisać problem.", "pl_PL"
+            )
+            second = await tts.synthesize_pcm8k(
+                "http://piper", "Dziękuję. Proszę opisać problem.", "pl_PL"
+            )
+        self.assertEqual(first, second)
+        self.assertEqual(_FakeTTSClient.calls, 1)
+
+    async def test_voice_changes_cache_key(self):
+        with patch.object(tts.httpx, "AsyncClient", _FakeTTSClient):
+            await tts.synthesize_pcm8k("http://piper", "Test", "voice-a")
+            await tts.synthesize_pcm8k("http://piper", "Test", "voice-b")
+        self.assertEqual(_FakeTTSClient.calls, 2)
 
 
 if __name__ == "__main__":
