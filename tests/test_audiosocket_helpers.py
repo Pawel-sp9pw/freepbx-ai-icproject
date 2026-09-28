@@ -31,6 +31,13 @@ class AudioSocketRegressionTests(unittest.TestCase):
         )
 
 
+    def test_prompt_leak_company_text_is_rejected_defensively(self):
+        for sample in (
+            "Dzwoniący podaje nazwę swojej firmy.",
+            "Dzwoniący podaje nazwę swojej firmy po polsku.",
+        ):
+            self.assertTrue(looks_like_invalid_company_name(sample), sample)
+
     def test_company_noise_and_repetition_are_rejected(self):
         samples = [
             "Nie, nie, nie, nie, nie, nie, nie, nie, nie, nie.",
@@ -133,12 +140,19 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertTrue(looks_like_ticket_cancellation(
             "Wie pan co? Prozygnuje ze zgłuszenia, sam to sprawdzi."
         ))
+        self.assertTrue(looks_like_ticket_cancellation(
+            "Proszę anulować. Złoszenie już nie jest potrzebne."
+        ))
+        self.assertTrue(looks_like_ticket_cancellation(
+            "Rozruszał, nie załatwiać zgłoszenia."
+        ))
         self.assertFalse(looks_like_ticket_cancellation(
             "Zgłoszenie jest potrzebne, proszę je zapisać."
         ))
 
     def test_extract_phone_digits(self):
         self.assertEqual(extract_phone_digits("792-032-104"), "792032104")
+        self.assertEqual(extract_phone_digits("451.05.59.99"), "451055999")
         self.assertEqual(extract_phone_digits("+48 792-032-104"), "792032104")
         self.assertEqual(extract_phone_digits("0048 792 032 104"), "792032104")
         self.assertEqual(
@@ -169,6 +183,16 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertTrue(looks_like_invalid_company_name("www.multi-moto.eu"))
         self.assertFalse(looks_like_invalid_company_name("Firma Alfatest"))
         self.assertFalse(looks_like_invalid_company_name("Pizzeria Roma"))
+
+    def test_repeated_confirmation_is_normalized_conservatively(self):
+        yes = ("tak", "zgadza się", "potwierdzam")
+        no = ("nie", "nie zgadza się", "popraw")
+        self.assertTrue(matches_confirmation_phrase("nie, nie", no))
+        self.assertTrue(matches_confirmation_phrase("nie, nie, nie, nie", no))
+        self.assertTrue(matches_confirmation_phrase("tak, tak", yes))
+        self.assertTrue(matches_confirmation_phrase("tak, dobra", yes))
+        self.assertFalse(matches_confirmation_phrase("tak, nie", yes))
+        self.assertFalse(matches_confirmation_phrase("tak, nie", no))
 
     def test_confirmation_requires_exact_phrase(self):
         yes = ("tak", "zgadza się", "potwierdzam")
