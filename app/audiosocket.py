@@ -589,6 +589,25 @@ class CallSession:
         self.ticket_ref = ""
         self.final_error = ""
 
+    def record_customer_match(self, source, company, contact, matched_customer, score):
+        """Persist safe matching telemetry for post-call regression analysis."""
+        payload = {
+            "source": str(source or ""),
+            "input_company": str(company or ""),
+            "normalized_company": normalize_company(str(company or "")),
+            "input_contact": re.sub(r"\D", "", str(contact or "")),
+            "matched": bool(matched_customer),
+            "matched_name": str((matched_customer or {}).get("name", "") or ""),
+            "score": round(float(score or 0.0), 4),
+            "company_trusted": bool(self.company_trusted),
+            "contact_trusted": bool(self.contact_trusted),
+        }
+        add_message(
+            self.call_id,
+            "match_debug",
+            json.dumps(payload, ensure_ascii=False),
+        )
+
     async def say(self, text):
         log.info("[%s] TTS: %s", self.call_id, text)
         add_message(self.call_id, "assistant", text)
@@ -891,7 +910,8 @@ class CallSession:
                 self.contact_attempts = 0
                 self.ticket_data["contact"] = phone
                 self.contact_trusted = True
-                matched_customer, _ = match_customer(str(self.ticket_data.get("company", "") or ""), phone, self.customer_directory)
+                matched_customer, match_score = match_customer(str(self.ticket_data.get("company", "") or ""), phone, self.customer_directory)
+                self.record_customer_match("dtmf_contact", str(self.ticket_data.get("company", "") or ""), phone, matched_customer, match_score)
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
@@ -1267,7 +1287,8 @@ class CallSession:
                         "Proszę podać ją ponownie, możliwie krótko i wyraźnie."
                     )
                     return
-                matched_customer, _ = match_customer(company_text, "", self.customer_directory)
+                matched_customer, match_score = match_customer(company_text, "", self.customer_directory)
+                self.record_customer_match("correction_company", company_text, "", matched_customer, match_score)
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
@@ -1312,10 +1333,17 @@ class CallSession:
                 self.awaiting_contact_dtmf = False
                 self.ticket_data["contact"] = phone
                 self.contact_trusted = self.contact_confidence_is_high(selected_score)
-                matched_customer, _ = match_customer(
+                matched_customer, match_score = match_customer(
                     str(self.ticket_data.get("company", "") or ""),
                     phone,
                     self.customer_directory,
+                )
+                self.record_customer_match(
+                    "correction_contact",
+                    str(self.ticket_data.get("company", "") or ""),
+                    phone,
+                    matched_customer,
+                    match_score,
                 )
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
@@ -1405,6 +1433,7 @@ class CallSession:
                 phone,
                 self.customer_directory,
             )
+            self.record_customer_match("initial_company", company_text, phone, matched_customer, match_score)
             if matched_customer:
                 self.ticket_data["company"] = matched_customer["name"]
                 self.company_trusted = True
@@ -1508,6 +1537,13 @@ class CallSession:
                 str(self.ticket_data.get("company", "") or ""),
                 phone,
                 self.customer_directory,
+            )
+            self.record_customer_match(
+                "initial_contact",
+                str(self.ticket_data.get("company", "") or ""),
+                phone,
+                matched_customer,
+                match_score,
             )
             if matched_customer:
                 self.ticket_data["company"] = matched_customer["name"]
@@ -1632,6 +1668,13 @@ class CallSession:
             str(self.ticket_data.get("contact", "") or ""),
             self.customer_directory,
         )
+        self.record_customer_match(
+            "fallback",
+            str(self.ticket_data.get("company", "") or ""),
+            str(self.ticket_data.get("contact", "") or ""),
+            matched_customer,
+            match_score,
+        )
         if matched_customer:
             self.ticket_data["company"] = matched_customer["name"]
             if not self.ticket_data.get("contact") and matched_customer.get("phone"):
@@ -1750,6 +1793,7 @@ async def handle_client(reader, writer):
                     caller_digits,
                     session.customer_directory,
                 )
+                session.record_customer_match("callerid", "", caller_digits, matched_customer, match_score)
                 if matched_customer:
                     session.caller_matched_customer = True
                     session.company_trusted = True
