@@ -460,6 +460,29 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(any("nie dosłyszałem" in x.lower() for x in h.spoken))
 
+    async def test_long_rejected_audio_cannot_be_silenced_by_short_retry_reason(self):
+        h = ConversationHarness()
+        await h.start()
+
+        fake_result = {
+            "selected": "",
+            "selected_score": None,
+            "mode": "company",
+            "audio_seconds": 1.70,
+            "pass1": {"text": "Zdecydowanie.", "score": -1.015, "rejected": True, "reason": "low_confidence"},
+            "pass2": {"text": "Zdecydowanie.", "score": -1.037, "rejected": True, "reason": "low_confidence"},
+            "retry": True,
+            # Defensive regression: even if metadata is wrong/stale, long audio
+            # must never be silently discarded.
+            "retry_reason": "short_rejected_audio",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=fake_result), \
+             patch.object(audiosocket, "add_message", return_value=None), \
+             patch.object(audiosocket.asyncio, "sleep", new=_no_sleep):
+            await h.session.process_utterance(b"\x00" * int(16000 * 1.70))
+
+        self.assertTrue(any("nie dosłyszałem" in x.lower() for x in h.spoken))
+
     async def test_short_prompt_leak_stays_silent(self):
         h = ConversationHarness()
         await h.start()
