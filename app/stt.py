@@ -105,6 +105,18 @@ def _looks_hallucinated(text: str, audio_seconds: float):
     if any(phrase in lower_clean for phrase in PROMPT_LEAK_PHRASES):
         return True, "prompt_leak"
 
+    # Catch paraphrased leakage of the generic STT instruction, e.g.
+    # "Dzwoniący podaje nazwę firmy, numer telefonu lub usterkę po polsku."
+    # Whisper may slightly rewrite the prompt, so exact phrase matching is not enough.
+    prompt_terms = (
+        "nazwa firmy", "nazwę firmy", "numer telefonu", "telefon",
+        "problem", "usterk", "po polsku",
+    )
+    if lower_clean.startswith(("dzwoniący podaje", "dzwoniacy podaje")):
+        hits = sum(1 for term in prompt_terms if term in lower_clean)
+        if hits >= 2:
+            return True, "prompt_leak"
+
     if any(phrase in lower_clean for phrase in KNOWN_WHISPER_HALLUCINATIONS):
         return True, "known_whisper_hallucination"
 
