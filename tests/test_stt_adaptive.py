@@ -77,6 +77,31 @@ class AdaptiveSTTTests(unittest.TestCase):
             )
         )
 
+    def test_english_contact_transcript_is_rejected_and_polish_retry_selected(self):
+        model = FakeModel([
+            ("Five hundred seventy nine, forty three, ninety two, thirty seven.", -0.48),
+            ("Pięćset siedemdziesiąt dziewięć czterdzieści trzy dziewięćdziesiąt dwa trzydzieści siedem.", -0.27),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 32000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Numer telefonu. Cyfry od zera do dziewięciu.",
+                mode="contact",
+                return_metadata=True,
+            )
+
+        self.assertTrue(result["pass1"]["rejected"])
+        self.assertEqual(result["pass1"]["reason"], "non_polish_contact")
+        self.assertEqual(
+            result["selected"],
+            "Pięćset siedemdziesiąt dziewięć czterdzieści trzy dziewięćdziesiąt dwa trzydzieści siedem.",
+        )
+        self.assertEqual(len(model.calls), 2)
+
     def test_contact_retries_only_when_structurally_invalid(self):
         self.assertFalse(stt._needs_adaptive_retry("792032104", -0.1, "contact"))
         self.assertFalse(stt._needs_adaptive_retry("792032104", -0.8, "contact"))
