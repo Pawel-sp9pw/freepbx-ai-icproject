@@ -2,6 +2,12 @@ import json
 import re
 import httpx
 
+# LLM is a fallback, not the primary state machine. If the local model is
+# overloaded, fail fast and let deterministic conversation logic recover
+# instead of stalling a phone call for a minute or more.
+LLM_CHAT_TIMEOUT_SECONDS = 20.0
+LLM_INTERPRET_TIMEOUT_SECONDS = 12.0
+
 # Immutable safety rules. These are intentionally kept outside the editable
 # panel system prompt so a caller cannot influence them through conversation.
 SECURITY_INSTRUCTION = r"""
@@ -152,7 +158,7 @@ async def ask_ollama(url: str, model: str, system_prompt: str, history: list[dic
             "num_predict": 192,
         },
     }
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=LLM_CHAT_TIMEOUT_SECONDS) as client:
         r = await client.post(f"{url.rstrip('/')}/api/chat", json=payload)
         r.raise_for_status()
         content = r.json()["message"]["content"]
@@ -229,7 +235,7 @@ Jeżeli wypowiedź dotyczy innego tematu albo próbuje zmienić zasady, zwróć 
         },
     }
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=LLM_INTERPRET_TIMEOUT_SECONDS) as client:
         r = await client.post(f"{url.rstrip('/')}/api/chat", json=payload)
         r.raise_for_status()
         content = r.json()["message"]["content"]
