@@ -99,22 +99,43 @@ def normalize_company(value: str):
     return re.sub(r"[^a-z0-9]+", " ", text).strip()
 
 
+def clean_company_display_name(value: str):
+    """Remove conversational prefixes without changing the actual company name."""
+    text = company_without_phone(value or "")
+    text = re.sub(r"^\s*(?:dzień dobry|dzien dobry|dobry wieczór|dobry wieczor|cześć|czesc|witam)[,.:;\-\s]*", "", text, flags=re.IGNORECASE)
+    # Prefixes may be stacked: "Dzień dobry, tu firma Alfatest".
+    for _ in range(3):
+        cleaned = re.sub(r"^\s*(?:tu|firma|spółka|spolka|z tej strony)\b[,.:;\-\s]*", "", text, flags=re.IGNORECASE)
+        if cleaned == text:
+            break
+        text = cleaned
+    return re.sub(r"\s+", " ", text).strip(" ,.;:-")
+
+
 def speak_phone(value: str):
     digits = re.sub(r"\D", "", value or "")
     return " ".join(digits) if digits else value
 
 
 def _spoken_polish_number_digits(value: str):
-    """Convert a conservative sequence of Polish number words to digits."""
+    """Convert Polish spoken/mixed phone-number text to digits conservatively."""
     text = (value or "").lower()
     text = text.translate(str.maketrans({
         "ą": "a", "ć": "c", "ę": "e", "ł": "l",
         "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z",
     }))
-    tokens = re.findall(r"[a-z]+", text)
-    if not tokens:
-        return ""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
 
+    # Harmless conversational words commonly emitted around a phone number.
+    fillers = {
+        "moj", "moja", "numer", "telefon", "telefonu", "kontaktowy", "kontaktowego",
+        "to", "jest", "prosze", "podaje", "podam", "tak", "brzmi",
+    }
+    aliases = {
+        "szescsty": "szescset",
+        "szescty": "szescset",
+    }
     units = {
         "zero": 0, "jeden": 1, "jedna": 1, "jedno": 1,
         "dwa": 2, "dwie": 2, "trzy": 3, "trzech": 3, "czy": 3, "cztery": 4,
@@ -126,17 +147,27 @@ def _spoken_polish_number_digits(value: str):
         "siedemnascie": 17, "osiemnascie": 18, "dziewietnascie": 19,
     }
     tens = {
-        "dwadziescia": 20, "dwadziesta": 20, "dwudziestu": 20, "trzydziesci": 30, "trzydziestu": 30,
-        "czterdziesci": 40, "czterdziestu": 40, "piecdziesiat": 50, "piecdziesieciu": 50, "szescdziesiat": 60, "szescdziesieciu": 60,
-        "siedemdziesiat": 70, "siedemdziesieciu": 70, "osiemdziesiat": 80, "osiemdziesieciu": 80, "dziewiecdziesiat": 90, "dziewiecdziesieciu": 90,
+        "dwadziescia": 20, "dwadziesta": 20, "dwudziestu": 20,
+        "trzydziesci": 30, "trzydziestu": 30,
+        "czterdziesci": 40, "czterdziestu": 40,
+        "piecdziesiat": 50, "piecdziesieciu": 50,
+        "szescdziesiat": 60, "szescdziesieciu": 60,
+        "siedemdziesiat": 70, "siedemdziesieciu": 70,
+        "osiemdziesiat": 80, "osiemdziesieciu": 80,
+        "dziewiecdziesiat": 90, "dziewiecdziesieciu": 90,
     }
     hundreds = {
         "sto": 100, "stu": 100, "dwiescie": 200, "trzysta": 300, "czterysta": 400,
         "piecset": 500, "szescset": 600, "siedemset": 700,
         "osiemset": 800, "dziewiecset": 900,
     }
-    known = set(units) | set(teens) | set(tens) | set(hundreds)
-    if any(token not in known for token in tokens):
+
+    tokens = re.findall(r"\d+|[a-z]+", text)
+    if not tokens:
+        return ""
+    tokens = [aliases.get(token, token) for token in tokens if token not in fillers]
+    known_words = set(units) | set(teens) | set(tens) | set(hundreds)
+    if any(not token.isdigit() and token not in known_words for token in tokens):
         return ""
 
     groups = []
@@ -153,7 +184,10 @@ def _spoken_polish_number_digits(value: str):
         has_hundred = has_tens = has_unit = False
 
     for token in tokens:
-        if token in hundreds:
+        if token.isdigit():
+            flush()
+            groups.append(token)
+        elif token in hundreds:
             if has_hundred or has_tens or has_unit:
                 flush()
             current = hundreds[token]
@@ -171,8 +205,7 @@ def _spoken_polish_number_digits(value: str):
             has_tens = True
         else:
             if token == "zero":
-                if has_hundred or has_tens or has_unit:
-                    flush()
+                flush()
                 groups.append("0")
                 continue
             if has_unit:
@@ -186,11 +219,10 @@ def _spoken_polish_number_digits(value: str):
 
 def extract_phone_digits(value: str, mode: str = "pl"):
     """Normalize a typed or spoken contact number according to validation."""
-    digits = re.sub(r"\D", "", value or "")
     mode = str(mode or "pl").lower()
-
+    digits = _spoken_polish_number_digits(value)
     if not digits:
-        digits = _spoken_polish_number_digits(value)
+        digits = re.sub(r"\D", "", value or "")
 
     if mode == "international":
         return digits if 7 <= len(digits) <= 15 else ""
@@ -541,6 +573,12 @@ class CallSession:
         self.company_confirmation_context = ""
         self.company_candidate_phone = ""
         self.early_problem_score = None
+        self.company_trusted = False
+        self.contact_trusted = False
+        self.contact_attempts = 0
+        self.awaiting_contact_dtmf = False
+        self.dtmf_contact_buffer = ""
+        self.dtmf_contact_context = ""
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -601,6 +639,23 @@ class CallSession:
             return float(selected_score) >= threshold
         except (TypeError, ValueError):
             return False
+
+    def contact_confidence_is_high(self, selected_score):
+        if selected_score is None:
+            return False
+        try:
+            threshold = float(self.settings.get("contact_auto_accept_logprob", -0.30))
+            return float(selected_score) >= threshold
+        except (TypeError, ValueError):
+            return False
+
+    def can_auto_finalize(self, problem_score):
+        return bool(
+            self.has_complete_ticket_data()
+            and self.company_trusted
+            and self.contact_trusted
+            and self.problem_confidence_is_high(problem_score)
+        )
 
     async def finalize_ticket(self, uncertain=False, silent=False, warning_text=""):
         ticket = dict(self.ticket_data)
@@ -812,6 +867,55 @@ class CallSession:
             prompt = (prompt + " Nazwy klientów: " + customer_names).strip()
         return prompt
 
+    async def handle_dtmf(self, payload: bytes):
+        if not self.awaiting_contact_dtmf:
+            return
+        try:
+            chars = payload.decode("ascii", errors="ignore")
+        except Exception:
+            chars = ""
+        for ch in chars:
+            if ch.isdigit():
+                if len(self.dtmf_contact_buffer) < 15:
+                    self.dtmf_contact_buffer += ch
+            elif ch == "#":
+                phone = extract_phone_digits(self.dtmf_contact_buffer, self.settings.get("phone_validation_mode", "pl"))
+                if not phone:
+                    self.dtmf_contact_buffer = ""
+                    await self.say("Numer ma nieprawidłową długość. Proszę wpisać dziewięć cyfr i zakończyć krzyżykiem.")
+                    return
+                context = self.dtmf_contact_context
+                self.awaiting_contact_dtmf = False
+                self.dtmf_contact_buffer = ""
+                self.dtmf_contact_context = ""
+                self.contact_attempts = 0
+                self.ticket_data["contact"] = phone
+                self.contact_trusted = True
+                matched_customer, _ = match_customer(str(self.ticket_data.get("company", "") or ""), phone, self.customer_directory)
+                if matched_customer:
+                    self.ticket_data["company"] = matched_customer["name"]
+                    self.company_trusted = True
+                    if matched_customer.get("phone"):
+                        self.ticket_data["contact"] = matched_customer["phone"]
+                if context == "correction":
+                    self.awaiting_correction = False
+                    self.correction_field = ""
+                    self.correction_attempts += 1
+                    self.confirmation_pending = True
+                    await self.say_confirmation_summary()
+                    return
+                self.awaiting_contact = False
+                if self.ticket_data.get("description"):
+                    if self.can_auto_finalize(self.early_problem_score):
+                        await self.finalize_ticket()
+                    else:
+                        self.confirmation_pending = True
+                        await self.say_confirmation_summary()
+                    return
+                self.awaiting_problem = True
+                await self.say("Dziękuję. Proszę opisać problem.")
+                return
+
     async def process_utterance(self, pcm: bytes):
         self.turns += 1
         try:
@@ -847,10 +951,13 @@ class CallSession:
         if not text:
             self.stt_misses += 1
             now = time.monotonic()
-            wait_before_repeat = 2.0 if (self.confirmation_pending or self.company_confirmation_pending) else 4.0
-            enough_time_to_answer = (now - self.last_tts_end) >= wait_before_repeat
-            repeat_cooldown_ok = (now - self.last_repeat_prompt) >= 8.0
-            if self.stt_misses >= 3 and enough_time_to_answer and repeat_cooldown_ok:
+            audio_seconds = len(pcm) / 16000.0
+            retry_reason = stt_result.get("retry_reason", "") if isinstance(stt_result, dict) else ""
+            # Residual 0.6 s TTS prompt-leak is expected and should stay silent.
+            if retry_reason == "short_rejected_audio":
+                return
+            repeat_cooldown_ok = (now - self.last_repeat_prompt) >= 4.0
+            if audio_seconds >= 0.50 and repeat_cooldown_ok:
                 self.stt_misses = 0
                 self.last_repeat_prompt = now
                 await self.say("Nie dosłyszałem. Proszę powtórzyć.")
@@ -944,6 +1051,7 @@ class CallSession:
 
             if matches_confirmation_phrase(normalized, yes_phrases):
                 self.ticket_data["company"] = self.company_candidate
+                self.company_trusted = True
                 if self.company_candidate_phone and not self.ticket_data.get("contact"):
                     self.ticket_data["contact"] = self.company_candidate_phone
                 context = self.company_confirmation_context
@@ -1152,7 +1260,7 @@ class CallSession:
                 return
 
             if self.correction_field == "company":
-                company_text = company_without_phone(text) or text.strip()
+                company_text = clean_company_display_name(text) or text.strip()
                 if looks_like_invalid_company_name(company_text):
                     await self.say(
                         "Nie udało mi się wiarygodnie rozpoznać nazwy firmy. "
@@ -1190,9 +1298,19 @@ class CallSession:
                         return
                     phone = extract_phone_digits(str(interpreted.get("contact", "") or ""), self.settings.get("phone_validation_mode", "pl"))
                 if not phone:
-                    await self.say("Nie udało mi się rozpoznać numeru. Proszę podać go cyfra po cyfrze.")
+                    self.contact_attempts += 1
+                    if self.contact_attempts >= 2:
+                        self.awaiting_contact_dtmf = True
+                        self.dtmf_contact_buffer = ""
+                        self.dtmf_contact_context = "correction"
+                        await self.say("Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem.")
+                    else:
+                        await self.say("Nie udało mi się rozpoznać numeru. Proszę podać go cyfra po cyfrze.")
                     return
+                self.contact_attempts = 0
+                self.awaiting_contact_dtmf = False
                 self.ticket_data["contact"] = phone
+                self.contact_trusted = self.contact_confidence_is_high(selected_score)
                 matched_customer, _ = match_customer(
                     str(self.ticket_data.get("company", "") or ""),
                     phone,
@@ -1219,7 +1337,7 @@ class CallSession:
                 self.ticket_data["description"] = text.strip()
                 self.ticket_data["title"] = text.strip()[:80] or "Zgłoszenie telefoniczne"
 
-                if self.has_complete_ticket_data() and self.problem_confidence_is_high(selected_score):
+                if self.can_auto_finalize(selected_score):
                     self.awaiting_correction = False
                     self.correction_field = ""
                     self.confirmation_pending = False
@@ -1245,7 +1363,7 @@ class CallSession:
         # Ollama is only a fallback for corrections / unusual utterances.
         if self.awaiting_company:
             phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
-            company_text = company_without_phone(text) or text.strip()
+            company_text = clean_company_display_name(text) or text.strip()
 
             if looks_like_invalid_company_name(company_text):
                 await self.say(
@@ -1269,7 +1387,7 @@ class CallSession:
                     await self.refuse_out_of_scope()
                     return
                 if interpreted.get("company"):
-                    company_text = str(interpreted["company"]).strip()
+                    company_text = clean_company_display_name(str(interpreted["company"])) or str(interpreted["company"]).strip()
                 if interpreted.get("contact") and not phone:
                     phone = extract_phone_digits(
                         str(interpreted["contact"]),
@@ -1286,8 +1404,10 @@ class CallSession:
             )
             if matched_customer:
                 self.ticket_data["company"] = matched_customer["name"]
+                self.company_trusted = True
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
+                    self.contact_trusted = True
             else:
                 confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                 low_confidence = (
@@ -1304,9 +1424,14 @@ class CallSession:
                     await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
                     return
                 self.ticket_data["company"] = company_text
+                self.company_trusted = bool(
+                    selected_score is not None
+                    and float(selected_score) >= confirm_threshold
+                )
 
             if phone and not self.ticket_data.get("contact"):
                 self.ticket_data["contact"] = phone
+                self.contact_trusted = self.contact_confidence_is_high(selected_score)
 
             self.awaiting_company = False
 
@@ -1318,7 +1443,7 @@ class CallSession:
                 if self.ticket_data.get("contact"):
                     self.awaiting_contact = False
                     self.awaiting_problem = False
-                    if self.problem_confidence_is_high(self.early_problem_score):
+                    if self.can_auto_finalize(self.early_problem_score):
                         await self.finalize_ticket()
                     else:
                         self.confirmation_pending = True
@@ -1355,13 +1480,26 @@ class CallSession:
                     self.ticket_data["company"] = str(interpreted["company"]).strip()
 
                 if not phone:
-                    await self.say(
-                        "Nie udało mi się rozpoznać numeru telefonu. "
-                        "Proszę podać go cyfra po cyfrze."
-                    )
+                    self.contact_attempts += 1
+                    if self.contact_attempts >= 2:
+                        self.awaiting_contact_dtmf = True
+                        self.dtmf_contact_buffer = ""
+                        self.dtmf_contact_context = "initial"
+                        await self.say(
+                            "Nie udało mi się pewnie rozpoznać numeru. "
+                            "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
+                        )
+                    else:
+                        await self.say(
+                            "Nie udało mi się rozpoznać numeru telefonu. "
+                            "Proszę podać go cyfra po cyfrze."
+                        )
                     return
 
+            self.contact_attempts = 0
+            self.awaiting_contact_dtmf = False
             self.ticket_data["contact"] = phone
+            self.contact_trusted = self.contact_confidence_is_high(selected_score)
 
             matched_customer, match_score = match_customer(
                 str(self.ticket_data.get("company", "") or ""),
@@ -1370,8 +1508,10 @@ class CallSession:
             )
             if matched_customer:
                 self.ticket_data["company"] = matched_customer["name"]
+                self.company_trusted = True
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
+                    self.contact_trusted = True
 
             self.awaiting_contact = False
 
@@ -1429,7 +1569,7 @@ class CallSession:
                 self.awaiting_contact = False
                 self.awaiting_problem = False
 
-                if self.problem_confidence_is_high(selected_score):
+                if self.can_auto_finalize(selected_score):
                     self.confirmation_pending = False
                     self.confirmation_misses = 0
                     await self.finalize_ticket()
@@ -1609,6 +1749,8 @@ async def handle_client(reader, writer):
                 )
                 if matched_customer:
                     session.caller_matched_customer = True
+                    session.company_trusted = True
+                    session.contact_trusted = True
                     session.ticket_data["company"] = matched_customer["name"]
                     if matched_customer.get("phone"):
                         session.ticket_data["contact"] = matched_customer["phone"]
@@ -1634,6 +1776,7 @@ async def handle_client(reader, writer):
                 await session.handle_pcm(payload)
             elif typ == TYPE_DTMF:
                 log.info("[%s] DTMF: %r", call_id, payload)
+                await session.handle_dtmf(payload)
     except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
         log.info("[%s] AudioSocket peer closed connection", call_id)
     except RuntimeError as e:
