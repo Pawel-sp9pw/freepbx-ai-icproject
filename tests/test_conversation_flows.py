@@ -105,7 +105,7 @@ async def _no_sleep(*args, **kwargs):
 
 
 class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
-    async def test_problem_state_prompt_does_not_include_generic_company_phone_prompt(self):
+    async def test_problem_state_uses_hotwords_without_initial_prompt(self):
         h = ConversationHarness()
         h.session.settings["stt_prompt"] = (
             "Rozmowa telefoniczna z polskim serwisem IT. "
@@ -117,11 +117,24 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         h.session.contact_trusted = True
 
         await h.start()
-        prompt = h.session.stt_prompt_for_state()
+        self.assertEqual(h.session.stt_prompt_for_state(), "")
+        hotwords = h.session.stt_hotwords_for_state()
+        self.assertIn("e-recepty", hotwords)
+        self.assertNotIn("dzwoniący", hotwords.lower())
 
-        self.assertIn("opisuje problem techniczny", prompt.lower())
-        self.assertNotIn("podaje nazwę firmy", prompt.lower())
-        self.assertNotIn("numer telefonu lub opis problemu", prompt.lower())
+    async def test_company_state_uses_directory_names_as_hotwords_only(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [
+            {"name": "Kardiologia PULSMED", "phone": "693693970"},
+            {"name": "Przychodnia Vena", "phone": "343295351"},
+        ]
+        await h.start()
+
+        self.assertEqual(h.session.stt_prompt_for_state(), "")
+        hotwords = h.session.stt_hotwords_for_state()
+        self.assertIn("Kardiologia PULSMED", hotwords)
+        self.assertIn("Przychodnia Vena", hotwords)
+        self.assertNotIn("Dzwoniący podaje", hotwords)
 
     async def test_ticket_field_provenance_tracks_collected_values(self):
         h = ConversationHarness()
