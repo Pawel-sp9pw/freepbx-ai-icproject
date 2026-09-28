@@ -135,6 +135,20 @@ def _spoken_polish_number_digits(value: str):
     aliases = {
         "szescsty": "szescset",
         "szescty": "szescset",
+        # Common Whisper substitutions of ordinal forms while callers dictate
+        # phone-number groups.
+        "jedenasty": "jedenascie",
+        "jedenaste": "jedenascie",
+        "dwunasty": "dwanascie",
+        "trzynasty": "trzynascie",
+        "czternasty": "czternascie",
+        "pietnasty": "pietnascie",
+        "szesnasty": "szesnascie",
+        "siedemnasty": "siedemnascie",
+        "osiemnasty": "osiemnascie",
+        "osianasty": "osiemnascie",
+        "dziewietnasty": "dziewietnascie",
+        "dwudziesta": "dwadziescia",
     }
     units = {
         "zero": 0, "jeden": 1, "jedna": 1, "jedno": 1,
@@ -1354,12 +1368,6 @@ class CallSession:
             elif self.correction_field == "contact":
                 phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
                 if not phone:
-                    interpreted = await self.interpret_fallback("nowy numer telefonu kontaktowego", text)
-                    if interpreted.get("blocked"):
-                        await self.refuse_out_of_scope()
-                        return
-                    phone = extract_phone_digits(str(interpreted.get("contact", "") or ""), self.settings.get("phone_validation_mode", "pl"))
-                if not phone:
                     self.contact_attempts += 1
                     if self.contact_attempts >= 2:
                         self.awaiting_contact_dtmf = True
@@ -1540,19 +1548,6 @@ class CallSession:
         if self.awaiting_contact:
             phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             if not phone:
-                interpreted = await self.interpret_fallback("numer telefonu kontaktowego", text)
-                if interpreted.get("blocked"):
-                    await self.refuse_out_of_scope()
-                    return
-                phone = extract_phone_digits(str(interpreted.get("contact", "") or ""), self.settings.get("phone_validation_mode", "pl"))
-
-                if not phone and interpreted.get("intent") == "problem" and interpreted.get("description"):
-                    self.ticket_data["description"] = str(interpreted["description"]).strip()
-
-                if not phone and interpreted.get("company"):
-                    self.ticket_data["company"] = str(interpreted["company"]).strip()
-
-                if not phone:
                     self.contact_attempts += 1
                     if self.contact_attempts >= 2:
                         self.awaiting_contact_dtmf = True
