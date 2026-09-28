@@ -1049,13 +1049,26 @@ class CallSession:
             now = time.monotonic()
             audio_seconds = len(pcm) / 16000.0
             retry_reason = stt_result.get("retry_reason", "") if isinstance(stt_result, dict) else ""
-            # Residual 0.6 s TTS prompt-leak is expected and should stay silent.
-            if retry_reason == "short_rejected_audio":
+            # Silence is allowed only for a genuinely short residual prompt-leak
+            # immediately after TTS. Never let a stale/misclassified retry_reason
+            # suppress a real 1-2 second caller utterance.
+            if retry_reason == "short_rejected_audio" and audio_seconds <= 0.80:
+                log.info(
+                    "[%s] Rejected short residual audio silently (%.2fs, reason=%s)",
+                    self.call_id,
+                    audio_seconds,
+                    retry_reason,
+                )
                 return
-            repeat_cooldown_ok = (now - self.last_repeat_prompt) >= 4.0
-            if audio_seconds >= 0.50 and repeat_cooldown_ok:
+            if audio_seconds >= 0.50:
                 self.stt_misses = 0
                 self.last_repeat_prompt = now
+                log.info(
+                    "[%s] Rejected real utterance; asking for repeat (%.2fs, reason=%s)",
+                    self.call_id,
+                    audio_seconds,
+                    retry_reason or "empty",
+                )
                 await self.say("Nie dosłyszałem. Proszę powtórzyć.")
             return
 
