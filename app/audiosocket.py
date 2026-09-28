@@ -747,6 +747,7 @@ class CallSession:
         self.rejected_company_names = set()
         self.rejected_company_counts = {}
         self.company_rejection_total = 0
+        self.company_recognition_failures = 0
         self.early_problem_score = None
         self.company_trusted = False
         self.contact_trusted = False
@@ -1210,6 +1211,7 @@ class CallSession:
                 if context == "company_recovery":
                     if matched_customer:
                         self.awaiting_company_phone_recovery = False
+                        self.company_recognition_failures = 0
                         self.awaiting_company = False
                         if self.ticket_data.get("description"):
                             self.confirmation_pending = True
@@ -1280,6 +1282,26 @@ class CallSession:
             now = time.monotonic()
             audio_seconds = len(pcm) / 16000.0
             retry_reason = stt_result.get("retry_reason", "") if isinstance(stt_result, dict) else ""
+
+            # Real company speech that produced no usable transcript still counts
+            # toward escaping the company-name loop. Ignore the ~0.6 s residual
+            # prompt echo right after TTS.
+            if (
+                self.awaiting_company
+                and not self.awaiting_company_phone_recovery
+                and audio_seconds >= 0.90
+                and retry_reason != "short_rejected_audio"
+            ):
+                self.company_recognition_failures += 1
+                if self.company_recognition_failures >= 3:
+                    self.awaiting_company_phone_recovery = True
+                    self.contact_attempts = 0
+                    self.stt_misses = 0
+                    await self.say(
+                        "Nie udało mi się pewnie rozpoznać nazwy firmy. "
+                        "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
+                    )
+                    return
 
             # Rejected phone speech is still a failed contact attempt. Do not
             # allow a different hallucination class to create an infinite loop.
@@ -1805,12 +1827,22 @@ class CallSession:
                     self.mark_ticket_field("company", "directory", phone_score, True)
                     self.mark_ticket_field("contact", "directory", None, True)
                     self.record_customer_match("company_recovery_phone", "", phone, phone_customer, phone_score)
+                    self.company_recognition_failures = 0
                     self.awaiting_company = False
                     self.awaiting_problem = True
                     await self.say("Dziękuję. Proszę opisać problem.")
                     return
 
             if looks_like_invalid_company_name(company_text):
+                self.company_recognition_failures += 1
+                if self.company_recognition_failures >= 3:
+                    self.awaiting_company_phone_recovery = True
+                    self.contact_attempts = 0
+                    await self.say(
+                        "Nie udało mi się pewnie rozpoznać nazwy firmy. "
+                        "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
+                    )
+                    return
                 try:
                     retry_result = await asyncio.to_thread(
                         transcribe_pcm16,
@@ -1869,6 +1901,7 @@ class CallSession:
                 # being extractable from the utterance.
                 company_text = extract_company_fragment(text, self.customer_directory)
 
+            self.company_recognition_failures = 0
             matched_customer, match_score = match_customer(
                 company_text,
                 phone,
