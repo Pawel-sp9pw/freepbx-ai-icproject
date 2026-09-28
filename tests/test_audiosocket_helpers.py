@@ -49,6 +49,13 @@ class AudioSocketRegressionTests(unittest.TestCase):
             "Tak, no.",
             "A to.",
             "Dzwoniący.",
+            "No dobra.",
+            "poproszę",
+            "Nie zauważyłem. Nie zauważyłem.",
+            "Szanowni Państwo, do zobaczenia.",
+            "Nie wierzę w to.",
+            "Mamy to.",
+            "Part II.",
             "tak",
         ]
         for sample in samples:
@@ -235,3 +242,10 @@ class AudioSocketRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NewCancellationRegressionTests(unittest.TestCase):
+    def test_fuzzy_cancellation_variants(self):
+        self.assertTrue(looks_like_ticket_cancellation("O, już działa. Zbłoszenie jest niepotrzebne."))
+        self.assertTrue(looks_like_ticket_cancellation("proszę nie zagładać zgłoszenia"))
+        self.assertTrue(looks_like_possible_cancellation("Złożenie jest niepotrzebne"))
