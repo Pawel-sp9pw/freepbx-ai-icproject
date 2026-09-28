@@ -122,6 +122,34 @@ def _confidence_floor_reason(score, mode: str):
     return ""
 
 
+def _looks_like_prompt_echo(text: str, initial_prompt: str):
+    """Detect transcripts that substantially copy the active Whisper prompt."""
+    def words(value):
+        normalized = (value or "").lower().translate(str.maketrans({
+            "ą": "a", "ć": "c", "ę": "e", "ł": "l",
+            "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+        }))
+        return re.findall(r"[a-z0-9]+", normalized)
+
+    out = words(text)
+    prompt = words(initial_prompt)
+    if len(out) < 2 or len(prompt) < 2:
+        return False
+
+    prompt_set = set(prompt)
+    overlap = sum(1 for token in out if token in prompt_set) / len(out)
+    if overlap < 0.80:
+        return False
+
+    # Require either a 2-word contiguous phrase or at least 3 overlapping words.
+    contiguous = any(
+        out[i:i + 2] == prompt[j:j + 2]
+        for i in range(len(out) - 1)
+        for j in range(len(prompt) - 1)
+    )
+    return contiguous or len(out) >= 3
+
+
 def _looks_hallucinated(text: str, audio_seconds: float):
     clean = " ".join((text or "").split()).strip()
     if not clean:
@@ -400,6 +428,8 @@ def transcribe_pcm16(
         )
         if mode == "contact" and _looks_like_numeric_contact_text(first_text):
             first_bad, first_reason = False, ""
+        elif _looks_like_prompt_echo(first_text, initial_prompt):
+            first_bad, first_reason = True, "prompt_leak"
         else:
             first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
         if not first_bad and mode == "contact":
@@ -475,6 +505,8 @@ def transcribe_pcm16(
             )
             if mode == "contact" and _looks_like_numeric_contact_text(second_text):
                 second_bad, second_reason = False, ""
+            elif _looks_like_prompt_echo(second_text, retry_prompt):
+                second_bad, second_reason = True, "prompt_leak"
             else:
                 second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
             if not second_bad and mode == "contact":
