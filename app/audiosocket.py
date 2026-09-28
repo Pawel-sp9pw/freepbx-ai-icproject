@@ -1132,47 +1132,56 @@ class CallSession:
         return "normal"
 
     def stt_prompt_for_state(self):
-        customer_names = ", ".join(x["name"] for x in self.customer_directory)
-        base = (self.settings.get("stt_prompt", "") or "").strip()
+        # Do not seed field-specific Whisper decodes with full sentences.
+        # initial_prompt becomes previous-text context and was the primary source
+        # of verbatim prompt leaks in short 8 kHz telephone utterances.
+        if (
+            self.confirmation_pending
+            or self.company_confirmation_pending
+            or self.awaiting_company
+            or self.awaiting_contact
+            or self.awaiting_company_phone_recovery
+            or self.awaiting_problem
+            or self.awaiting_correction
+        ):
+            return ""
+        return (self.settings.get("stt_prompt", "") or "").strip()
+
+    def stt_hotwords_for_state(self):
+        customer_names = " ".join(
+            str(x.get("name", "") or "").strip()
+            for x in self.customer_directory
+            if str(x.get("name", "") or "").strip()
+        )
 
         if self.confirmation_pending or self.company_confirmation_pending:
-            # Keep this deliberately tiny. Longer prompts can be hallucinated
-            # verbatim by Whisper on very short telephone utterances.
-            return "tak, nie"
+            return "tak nie"
 
         if self.awaiting_correction and not self.correction_field:
-            # Field names are exactly what the caller is expected to say here;
-            # prompting Whisper with them caused valid "Opis problemu" to be
-            # rejected as prompt leakage.
-            return ""
+            return "firma nazwa numer telefon kontakt opis problem"
 
         if self.awaiting_correction and self.correction_field == "company":
-            return "Dzwoniący podaje nazwę swojej firmy po polsku."
-
-        if self.awaiting_company_phone_recovery:
-            return "Numer telefonu. Cyfry od zera do dziewięciu."
+            return customer_names
 
         if self.awaiting_company:
-            return "Dzwoniący podaje nazwę swojej firmy po polsku."
+            return customer_names
+
+        if self.awaiting_company_phone_recovery:
+            return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
 
         if self.awaiting_correction and self.correction_field == "contact":
-            return "Numer telefonu. Cyfry od zera do dziewięciu."
+            return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
 
         if self.awaiting_contact:
-            return "Numer telefonu. Cyfry od zera do dziewięciu."
+            return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
 
         if self.awaiting_correction and self.correction_field == "description":
-            hint = (self.settings.get("stt_problem_hint", "") or "").strip()
-            return ("Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
+            return (self.settings.get("stt_problem_hint", "") or "").strip()
 
         if self.awaiting_problem:
-            hint = (self.settings.get("stt_problem_hint", "") or "").strip()
-            return ("Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
+            return (self.settings.get("stt_problem_hint", "") or "").strip()
 
-        prompt = base
-        if customer_names:
-            prompt = (prompt + " Nazwy klientów: " + customer_names).strip()
-        return prompt
+        return ""
 
     async def handle_dtmf(self, payload: bytes):
         try:
@@ -1329,6 +1338,7 @@ class CallSession:
                 True,
                 int(self.settings.get("stt_workers", 2) or 2),
                 self.call_id,
+                self.stt_hotwords_for_state(),
             )
             if isinstance(stt_result, dict):
                 text = str(stt_result.get("selected", "") or "")
