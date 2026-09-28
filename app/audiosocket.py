@@ -882,11 +882,11 @@ class CallSession:
 
         if self.awaiting_correction and self.correction_field == "description":
             hint = (self.settings.get("stt_problem_hint", "") or "").strip()
-            return (base + " Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
+            return ("Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
 
         if self.awaiting_problem:
             hint = (self.settings.get("stt_problem_hint", "") or "").strip()
-            return (base + " Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
+            return ("Dzwoniący opisuje problem techniczny lub usterkę po polsku. " + hint).strip()
 
         prompt = base
         if customer_names:
