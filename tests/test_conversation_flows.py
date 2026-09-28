@@ -123,6 +123,22 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("podaje nazwę firmy", prompt.lower())
         self.assertNotIn("numer telefonu lub opis problemu", prompt.lower())
 
+    async def test_ticket_field_provenance_tracks_collected_values(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Alfatest", score=-0.20)
+        self.assertEqual(h.session.ticket_field_meta["company"]["source"], "stt")
+        self.assertTrue(h.session.ticket_field_meta["company"]["trusted"])
+
+        await h.user("600 100 200", score=-0.20)
+        self.assertEqual(h.session.ticket_field_meta["contact"]["source"], "stt")
+        self.assertTrue(h.session.ticket_field_meta["contact"]["trusted"])
+
+        await h.user("Nie działa drukarka", score=-0.20)
+        self.assertEqual(h.session.ticket_field_meta["description"]["source"], "stt")
+        self.assertTrue(h.session.ticket_field_meta["description"]["trusted"])
+
     async def test_recognized_caller_problem_yes_creates_ticket(self):
         h = ConversationHarness()
         h.session.ticket_data = {
