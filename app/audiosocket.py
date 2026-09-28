@@ -251,7 +251,7 @@ def extract_phone_digits(value: str, mode: str = "pl"):
 
 
 def looks_like_invalid_company_name(value: str):
-    normalized = " ".join((value or "").lower().split())
+    normalized = " ".join((value or "").lower().strip(" .,!?:;").split())
     if not normalized:
         return True
 
