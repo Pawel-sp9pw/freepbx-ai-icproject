@@ -353,13 +353,17 @@ def looks_like_ticket_cancellation(text: str):
         return True
 
     # Tolerate common one-character STT corruptions seen in phone audio.
-    fuzzy_ticket = bool(re.search(r"\b(?:z|s|b)?[gk]?[*]?l?o?szen\w*\b|\bz[łl]o?szen\w*\b|\bzb[łl]oszen\w*\b", normalized))
+    folded = normalized.translate(str.maketrans({
+        "ą": "a", "ć": "c", "ę": "e", "ł": "l",
+        "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+    }))
+    fuzzy_ticket = bool(re.search(r"\b(?:z|s|b)?(?:g|k|b)?loszen\w*\b|\bzlozen\w*\b|\bzbloszen\w*\b", folded))
     cancel_action = bool(re.search(
-        r"\b(?:nie\s+)?(?:za[kg][łl]ad\w*|zag[łl]ad\w*|zak[łl]ad\w*|tworz\w*|tw[oó]rz\w*|rejestr\w*|zapis\w*)\b",
-        normalized,
+        r"\b(?:nie\s+)?(?:za[kg]lad\w*|zaglad\w*|zaklad\w*|tworz\w*|rejestr\w*|zapis\w*)\b",
+        folded,
     ))
-    no_longer_needed = "niepotrzebn" in normalized or bool(re.search(r"\bnie\s+potrzebn", normalized))
-    already_works = bool(re.search(r"\bju[żz]\b.*\bdzia[łl]a", normalized)) or "zaczęło działać" in normalized or "zaczelo dzialac" in normalized
+    no_longer_needed = "niepotrzebn" in folded or bool(re.search(r"\bnie\s+potrzebn", folded))
+    already_works = bool(re.search(r"\bjuz\b.*\bdziala", folded)) or "zaczelo dzialac" in folded
 
     # Require two semantic signals to avoid cancelling a normal technical report.
     if fuzzy_ticket and (cancel_action or no_longer_needed):
