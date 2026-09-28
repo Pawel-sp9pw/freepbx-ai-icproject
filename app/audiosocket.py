@@ -256,6 +256,8 @@ def looks_like_invalid_company_name(value: str):
         return True
 
     bad_fragments = (
+        "dzwoniący podaje nazwę swojej firmy",
+        "dzwoniacy podaje nazwe swojej firmy",
         "amara.org",
         "youtube.com",
         "youtu.be",
@@ -276,8 +278,10 @@ def looks_like_invalid_company_name(value: str):
     # valid company names. Keep this check company-specific so confirmation
     # utterances such as "nie" remain valid in their own state.
     company_only_noise = {
-        "tak", "nie", "dobrze", "dziękuję", "dziekuje", "do zobaczenia",
-        "do widzenia", "no", "to jest", "yyy", "yyy yyy", "hmm",
+        "tak", "nie", "dobrze", "dziękuję", "dziekuje", "bardzo dziękuję",
+        "bardzo dziekuje", "dzień dobry", "dzien dobry", "cześć", "czesc",
+        "do zobaczenia", "do widzenia", "co to jest", "dzwonię", "dzwonie",
+        "no", "to jest", "yyy", "yyy yyy", "hmm",
     }
     if normalized in company_only_noise:
         return True
@@ -319,6 +323,9 @@ def looks_like_ticket_cancellation(text: str):
         r"\bju[żz]\s+(?:zacz[ęe][łl]o\s+)?dzia[łl]a[ćc]?\b.*\b(?:nie|unie)\s+.*\bzg[łl][ou]szen",
         r"\bprosz[ęe]\b.*\b(?:nie|unie)\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl][ou]szen",
         r"\b(?:anul|omu[łl])\w*\b.*\bzg[łl][ou]szen",
+        r"\bprosz[ęe]\s+anulowa[ćc]\b.*\b(?:zg[łl][ou]szen|z[łl][ou]szen)",
+        r"\bnie\s+(?:za[łl]atwia[ćc]|za[łl]atwiaj)\b.*\b(?:zg[łl][ou]szen|z[łl][ou]szen)",
+        r"\b(?:zg[łl][ou]szen|z[łl][ou]szen)\w*\b.*\bnie\s+(?:jest\s+)?potrzebn",
         r"\bproblem\s+(?:ju[żz]\s+)?(?:rozwi[aą]zany|znikn[aą][łl]|ust[aą]pi[łl])\b.*\bnie\s+.*\bzg[łl][ou]szen",
     )
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
@@ -436,7 +443,27 @@ def matches_confirmation_phrase(text: str, phrases: tuple[str, ...]):
     normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
     if not normalized:
         return False
-    return normalized in phrases
+    if normalized in phrases:
+        return True
+
+    # Whisper often repeats a short confirmation ("nie, nie, nie") or appends
+    # a harmless acknowledgement ("tak, dobra"). Collapse only unambiguous
+    # repeated yes/no forms; never infer intent from mixed yes+no text.
+    words = re.findall(r"[a-ząćęłńóśźż]+", normalized, flags=re.IGNORECASE)
+    if not words:
+        return False
+    has_yes = "tak" in words
+    has_no = "nie" in words
+    if has_yes and has_no:
+        return False
+
+    phrase_set = set(phrases)
+    if has_yes and "tak" in phrase_set:
+        allowed_yes_tail = {"tak", "dobra", "dobrze", "zgadza", "się", "sie"}
+        return all(word in allowed_yes_tail for word in words)
+    if has_no and "nie" in phrase_set:
+        return all(word == "nie" for word in words)
+    return False
 
 
 def apply_llm_fill_only(ticket_data: dict, ticket_update: dict):
@@ -998,6 +1025,7 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
                         self.mark_ticket_field("contact", "directory", None, True)
+                        self.mark_ticket_field("contact", "directory", None, True)
                 if context == "correction":
                     self.awaiting_correction = False
                     self.correction_field = ""
@@ -1170,6 +1198,13 @@ class CallSession:
                 self.mark_ticket_field("company", "confirmed_stt", self.company_candidate_score, True)
                 if self.company_candidate_phone and not self.ticket_data.get("contact"):
                     self.ticket_data["contact"] = self.company_candidate_phone
+                    self.contact_trusted = self.contact_confidence_is_high(self.company_candidate_score)
+                    self.mark_ticket_field(
+                        "contact",
+                        "stt",
+                        self.company_candidate_score,
+                        self.contact_trusted,
+                    )
                 context = self.company_confirmation_context
                 self.company_confirmation_pending = False
                 self.company_candidate = ""
@@ -1460,6 +1495,7 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
                         self.mark_ticket_field("contact", "directory", None, True)
+                        self.mark_ticket_field("contact", "directory", None, True)
 
             elif self.correction_field == "description":
                 if looks_like_human_handoff_request(text):
@@ -1557,6 +1593,7 @@ class CallSession:
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
                     self.contact_trusted = True
+                    self.mark_ticket_field("contact", "directory", None, True)
             else:
                 confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                 low_confidence = (
@@ -1660,6 +1697,7 @@ class CallSession:
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
                     self.contact_trusted = True
+                    self.mark_ticket_field("contact", "directory", None, True)
 
             self.awaiting_contact = False
 
