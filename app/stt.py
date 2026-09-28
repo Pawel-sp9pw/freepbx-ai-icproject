@@ -278,6 +278,7 @@ def _transcribe_once(
     beam_size,
     use_vad=True,
     patience=1.0,
+    max_new_tokens=None,
 ):
     kwargs = {
         "language": "pl",
@@ -291,7 +292,10 @@ def _transcribe_once(
         "compression_ratio_threshold": 2.4,
         "initial_prompt": initial_prompt or None,
         "suppress_blank": True,
+        "without_timestamps": True,
     }
+    if max_new_tokens is not None:
+        kwargs["max_new_tokens"] = int(max_new_tokens)
     if use_vad:
         kwargs["vad_parameters"] = {
             "min_silence_duration_ms": 350,
@@ -351,6 +355,7 @@ def transcribe_pcm16(
             # The application already segmented the utterance with WebRTC VAD.
             use_vad=False,
             patience=1.10,
+            max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
         )
         first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
         if not first_bad:
@@ -417,6 +422,7 @@ def transcribe_pcm16(
                 beam_size=8,
                 use_vad=False,
                 patience=1.30,
+                max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
             )
             second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
             if not second_bad:
