@@ -129,6 +129,7 @@ class AdaptiveSTTTests(unittest.TestCase):
             )
 
         self.assertEqual(result["selected"], "")
+        self.assertTrue(result["pass1"]["rejected"])
         self.assertEqual(result["pass1"]["reason"], "prompt_leak")
         self.assertEqual(result["retry_reason"], "short_rejected_audio")
         self.assertFalse(result["retry"])
