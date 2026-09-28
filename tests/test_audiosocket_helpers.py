@@ -2,6 +2,7 @@ import unittest
 
 from app.audiosocket import (
     apply_llm_fill_only,
+    clean_company_display_name,
     extract_phone_digits,
     looks_like_invalid_company_name,
     match_customer,
@@ -76,6 +77,12 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertIsNone(customer)
         self.assertGreater(score, 0.0)
 
+    def test_clean_company_display_name_removes_only_conversational_prefixes(self):
+        self.assertEqual(clean_company_display_name("Firma Alfatest"), "Alfatest")
+        self.assertEqual(clean_company_display_name("Dzień dobry, tu firma Alfatest"), "Alfatest")
+        self.assertEqual(clean_company_display_name("Spółka Alfa Med"), "Alfa Med")
+        self.assertEqual(clean_company_display_name("Alfa Firma Serwis"), "Alfa Firma Serwis")
+
     def test_extract_phone_digits(self):
         self.assertEqual(extract_phone_digits("792-032-104"), "792032104")
         self.assertEqual(extract_phone_digits("+48 792-032-104"), "792032104")
@@ -87,6 +94,16 @@ class AudioSocketRegressionTests(unittest.TestCase):
             "880227784",
         )
         self.assertEqual(extract_phone_digits("siedem dziewięć dwa zero trzy dwa jeden zero cztery"), "792032104")
+        self.assertEqual(
+            extract_phone_digits("Mój numer to siedemset trzydzieści pięć, siedemdziesiąt trzy, siedemdziesiąt sześć, dwadzieścia osiem"),
+            "735737628",
+        )
+        self.assertEqual(extract_phone_digits("Mój numer to 7357, czy 7628."), "735737628")
+        self.assertEqual(extract_phone_digits("Mój numer to 7 3 5 7 czy 7 6 2 8."), "735737628")
+        self.assertEqual(
+            extract_phone_digits("Osiemset osiemdziesiąt trzy, sześćsty trzy, sto trzydzieści dziewięć."),
+            "883603139",
+        )
         self.assertEqual(extract_phone_digits("599-3131-2120"), "")
         self.assertEqual(extract_phone_digits("123"), "")
         self.assertEqual(extract_phone_digits("+44 20 7946 0958", "pl"), "")
