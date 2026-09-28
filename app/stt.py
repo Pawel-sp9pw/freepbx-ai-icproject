@@ -367,6 +367,7 @@ def _transcribe_once(
     use_vad=True,
     patience=1.0,
     max_new_tokens=None,
+    hotwords="",
 ):
     kwargs = {
         "language": "pl",
@@ -379,6 +380,7 @@ def _transcribe_once(
         "log_prob_threshold": -1.2,
         "compression_ratio_threshold": 2.4,
         "initial_prompt": initial_prompt or None,
+        "hotwords": hotwords or None,
         "suppress_blank": True,
         "without_timestamps": True,
     }
@@ -407,6 +409,7 @@ def transcribe_pcm16(
     return_metadata=False,
     num_workers=1,
     log_context="",
+    hotwords="",
 ):
     prepared_pcm, prepared_rate = _prepare_phone_audio(pcm, sample_rate)
 
@@ -445,6 +448,7 @@ def transcribe_pcm16(
             use_vad=False,
             patience=1.10,
             max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
+            hotwords=hotwords,
         )
         if mode == "confirmation" and _looks_like_repeated_confirmation(first_text):
             first_bad, first_reason = False, ""
@@ -510,11 +514,15 @@ def transcribe_pcm16(
                 meta["retry_reason"] = "no_confidence"
             else:
                 meta["retry_reason"] = "low_confidence_or_short_field"
-            # For company/contact keep the domain hint. For a weak problem
-            # description, remove the prompt in pass 2 to reduce prompt bias.
+            # Keep initial_prompt out of adaptive retries for company/problem.
+            # Hotwords are a safer bias mechanism because they do not become
+            # previous-text context that Whisper can copy verbatim.
             retry_prompt = initial_prompt
+            retry_hotwords = hotwords
             if mode in ("problem", "company"):
                 retry_prompt = ""
+            if mode == "problem":
+                retry_hotwords = ""
 
             second_text, second_score = _transcribe_once(
                 model,
@@ -524,6 +532,7 @@ def transcribe_pcm16(
                 use_vad=False,
                 patience=1.30,
                 max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
+                hotwords=retry_hotwords,
             )
             if mode == "contact" and _looks_like_numeric_contact_text(second_text):
                 second_bad, second_reason = False, ""
