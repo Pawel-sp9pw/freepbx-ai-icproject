@@ -993,6 +993,8 @@ class CallSession:
                     self.mark_ticket_field("company", "directory", match_score, True)
                     if matched_customer.get("phone"):
                         self.ticket_data["contact"] = matched_customer["phone"]
+                        self.contact_trusted = True
+                        self.mark_ticket_field("contact", "directory", None, True)
                 if context == "correction":
                     self.awaiting_correction = False
                     self.correction_field = ""
@@ -1411,7 +1413,11 @@ class CallSession:
                         )
                         return
                     self.ticket_data["company"] = company_text
-                self.mark_ticket_field("company", "stt", selected_score, self.company_trusted)
+                    self.company_trusted = bool(
+                        selected_score is not None
+                        and float(selected_score) >= confirm_threshold
+                    )
+                    self.mark_ticket_field("company", "stt", selected_score, self.company_trusted)
 
             elif self.correction_field == "contact":
                 phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
@@ -1449,6 +1455,7 @@ class CallSession:
                     if matched_customer.get("phone"):
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
+                        self.mark_ticket_field("contact", "directory", None, True)
 
             elif self.correction_field == "description":
                 if looks_like_human_handoff_request(text):
@@ -1557,11 +1564,11 @@ class CallSession:
                     await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
                     return
                 self.ticket_data["company"] = company_text
-                self.mark_ticket_field("company", "stt", selected_score, self.company_trusted)
                 self.company_trusted = bool(
                     selected_score is not None
                     and float(selected_score) >= confirm_threshold
                 )
+                self.mark_ticket_field("company", "stt", selected_score, self.company_trusted)
 
             if phone and not self.ticket_data.get("contact"):
                 self.ticket_data["contact"] = phone
