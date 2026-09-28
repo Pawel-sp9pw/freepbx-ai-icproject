@@ -673,6 +673,21 @@ PersistentKeepalive = 25"></textarea>
         if(includeDebug) lines.push(formatMatchDebugForClipboard(m.content));
         continue;
       }
+      if(m.role==='ticket'){
+        if(includeDebug){
+          try{
+            const d=JSON.parse(m.content || '{}');
+            lines.push('[TICKET] company='+JSON.stringify(d.company || '')+
+              ' contact='+JSON.stringify(d.contact || '')+
+              ' description='+JSON.stringify(d.description || '')+
+              ' uncertain='+(d.uncertain?'yes':'no'));
+            lines.push('  field_meta='+JSON.stringify(d.field_meta || {}));
+          }catch(e){
+            lines.push('[TICKET raw] '+String(m.content || ''));
+          }
+        }
+        continue;
+      }
       if(m.role==='user') lines.push('Klient: '+m.content);
       else if(m.role==='assistant') lines.push('Agent: '+m.content);
       else if(includeDebug) lines.push((m.role || 'inne')+': '+m.content);
@@ -846,6 +861,19 @@ PersistentKeepalive = 25"></textarea>
               '\nzaufanie firma/telefon: '+(d.company_trusted?'tak':'nie')+'/'+(d.contact_trusted?'tak':'nie');
           }catch(e){}
           html+='<details class="msg" style="background:#f7f7f7"><summary><strong>'+summary+'</strong></summary><pre style="white-space:pre-wrap;margin:8px 0 0 0">'+esc(details)+'</pre></details>';
+          continue;
+        }
+        if(m.role==='ticket'){
+          let details=m.content || '';
+          try{
+            const d=JSON.parse(m.content || '{}');
+            details='firma: '+(d.company || '—')+
+              '\nnumer: '+(d.contact || '—')+
+              '\nopis: '+(d.description || '—')+
+              '\nniepewne: '+(d.uncertain?'tak':'nie')+
+              '\nźródła: '+JSON.stringify(d.field_meta || {});
+          }catch(e){}
+          html+='<details class="msg" style="background:#eef7ff"><summary><strong>Zapisane zgłoszenie</strong></summary><pre style="white-space:pre-wrap;margin:8px 0 0 0">'+esc(details)+'</pre></details>';
           continue;
         }
         const cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'');
