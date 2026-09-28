@@ -44,6 +44,7 @@ class AudioSocketRegressionTests(unittest.TestCase):
             "Do zobaczenia.",
             "No, no, no, to jest...",
             "Dziękuję.",
+            "Szanowny.",
             "tak",
         ]
         for sample in samples:
