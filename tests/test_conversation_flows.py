@@ -330,16 +330,10 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         h.session.ticket_data = {"contact": "790205140"}
         h.session.contact_trusted = True
 
-        async def fallback(expected, text):
-            return {
-                "intent": "problem",
-                "company": "Tomek",
-                "contact": "",
-                "description": "",
-                "blocked": False,
-            }
+        async def fail_fallback(*args, **kwargs):
+            raise AssertionError("LLM must not be called for mixed company/problem")
 
-        h.session.interpret_fallback = fallback
+        h.session.interpret_fallback = fail_fallback
 
         await h.start()
         self.assertTrue(h.session.awaiting_company)
@@ -355,16 +349,10 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_early_problem_is_kept_while_agent_collects_missing_phone(self):
         h = ConversationHarness()
 
-        async def fallback(expected, text):
-            return {
-                "intent": "problem",
-                "company": "Tomek",
-                "contact": "",
-                "description": "Nie działa nam poczta",
-                "blocked": False,
-            }
+        async def fail_fallback(*args, **kwargs):
+            raise AssertionError("LLM must not be called for mixed company/problem")
 
-        h.session.interpret_fallback = fallback
+        h.session.interpret_fallback = fail_fallback
 
         await h.start()
         await h.user("Dzień dobry, tu Tomek. Nie działa nam poczta.", score=-0.237)
@@ -380,6 +368,41 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.saved[0]["ticket"]["contact"], "790205140")
         self.assertEqual(h.saved[0]["ticket"]["description"], "Nie działa nam poczta")
         self.assertFalse(any("proszę opisać problem" in x.lower() for x in h.spoken[1:]))
+
+    async def test_mixed_directory_company_problem_is_deterministic(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Rehabilitacja ETOS", "phone": "451055999"}]
+
+        async def fail_fallback(*args, **kwargs):
+            raise AssertionError("LLM must not be called for mixed company/problem")
+        h.session.interpret_fallback = fail_fallback
+
+        await h.start()
+        await h.user(
+            "Dzień dobry. Tu rehabilitacja etos nie działa nam poczta.",
+            score=-0.247,
+        )
+
+        self.assertEqual(h.session.ticket_data["company"], "Rehabilitacja ETOS")
+        self.assertEqual(h.session.ticket_data["contact"], "451055999")
+        self.assertIn("nie działa nam poczta", h.session.ticket_data["description"].lower())
+
+    async def test_two_different_rejected_company_variants_switch_to_phone_recovery(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Tomek", "phone": "790205140"}]
+        await h.start()
+
+        await h.user("Zelnik", score=-0.80)
+        await h.user("nie", score=-0.10)
+        await h.user("Zdełnek", score=-0.80)
+        await h.user("nie", score=-0.10)
+
+        self.assertEqual(h.session.company_rejection_total, 2)
+        self.assertTrue(any("numer telefonu kontaktowego" in x.lower() for x in h.spoken))
+
+        await h.user("790205140", score=-0.2)
+        self.assertEqual(h.session.ticket_data["company"], "Tomek")
+        self.assertEqual(h.session.ticket_data["contact"], "790205140")
 
     async def test_unknown_caller_collects_company_contact_problem_and_confirms(self):
         h = ConversationHarness()
