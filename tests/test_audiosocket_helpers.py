@@ -16,14 +16,14 @@ class AudioSocketRegressionTests(unittest.TestCase):
 
     def test_phone_parser_accepts_observed_ordinal_variants(self):
         self.assertEqual(
-            audiosocket.extract_phone_digits(
+            extract_phone_digits(
                 "Pięćset pięć, jedenasty, osiemdziesiąt cztery, osiąnasty.",
                 "pl",
             ),
             "505118418",
         )
         self.assertEqual(
-            audiosocket.extract_phone_digits(
+            extract_phone_digits(
                 "Osiemset dwudziesta sześć pięćdziesiąt dziewięć dwudziesta osiem dziewięćdziesiąt pięć.",
                 "pl",
             ),
@@ -41,14 +41,14 @@ class AudioSocketRegressionTests(unittest.TestCase):
         ]
         for sample in samples:
             self.assertTrue(
-                audiosocket.looks_like_invalid_company_name(sample),
+                looks_like_invalid_company_name(sample),
                 sample,
             )
 
     def test_normal_company_names_are_not_rejected_as_noise(self):
         for sample in ("Przychodnia Testowa Beta", "Apteka Testowa Pod Dębem", "No Problem IT"):
             self.assertFalse(
-                audiosocket.looks_like_invalid_company_name(sample),
+                looks_like_invalid_company_name(sample),
                 sample,
             )
 
