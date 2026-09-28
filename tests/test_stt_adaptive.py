@@ -137,6 +137,45 @@ class AdaptiveSTTTests(unittest.TestCase):
         selected = stt._choose_candidate("Pizzeria", -0.20, "Fitzseria", -0.50)
         self.assertEqual(selected, "Pizzeria")
 
+    def test_company_prompt_leak_without_po_polsku_is_rejected(self):
+        model = FakeModel([
+            ("Dzwoniący podaje nazwę swojej firmy.", -0.431),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 9600,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący podaje nazwę swojej firmy po polsku.",
+                mode="company",
+                return_metadata=True,
+            )
+        self.assertEqual(result["selected"], "")
+        self.assertTrue(result["pass1"]["rejected"])
+        self.assertEqual(result["pass1"]["reason"], "prompt_leak")
+        self.assertEqual(result["retry_reason"], "short_rejected_audio")
+
+    def test_numeric_contact_with_dots_is_not_treated_as_domain(self):
+        model = FakeModel([
+            ("451.05.59.99", -0.218),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * int(16000 * 4.82),
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Numer telefonu. Cyfry od zera do dziewięciu.",
+                mode="contact",
+                return_metadata=True,
+            )
+        self.assertEqual(result["selected"], "451.05.59.99")
+        self.assertFalse(result["pass1"]["rejected"])
+        self.assertIsNone(result["pass2"])
+
     def test_paraphrased_generic_prompt_leak_is_rejected(self):
         model = FakeModel([
             ("Dzwoniący podaje nazwę firmy, numer telefonu lub usterkę po polsku.", -0.50),
