@@ -428,6 +428,31 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("firma alpha pist" in x.lower() for x in h.spoken))
         self.assertFalse(any("firma firma" in x.lower() for x in h.spoken))
 
+    async def test_cancellation_during_contact_state_ends_without_ticket(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company": "Alfatest"}
+        h.session.company_trusted = True
+        await h.start()
+        self.assertTrue(h.session.awaiting_contact)
+
+        await h.user("Proszę anulować. Złoszenie już nie jest potrzebne.", score=-0.23)
+
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_cancelled")
+        self.assertEqual(h.saved, [])
+
+    async def test_directory_company_match_marks_directory_contact_provenance(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Przychodnia Vena", "phone": "343295351"}]
+        await h.start()
+
+        await h.user("Przychodnia węna", score=-0.326)
+
+        self.assertEqual(h.session.ticket_data["company"], "Przychodnia Vena")
+        self.assertEqual(h.session.ticket_data["contact"], "343295351")
+        self.assertEqual(h.session.ticket_field_meta["contact"]["source"], "directory")
+        self.assertTrue(h.session.ticket_field_meta["contact"]["trusted"])
+
     async def test_second_failed_phone_attempt_switches_to_dtmf(self):
         h = ConversationHarness()
         h.session.ticket_data = {"company": "Alfatest"}
