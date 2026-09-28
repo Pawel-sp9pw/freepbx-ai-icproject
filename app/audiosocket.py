@@ -282,6 +282,13 @@ def looks_like_invalid_company_name(value: str):
         "no dobra",
         "mamy to",
         "part ii",
+        "nie wiem",
+        "nie wiem jak się nazywa",
+        "nie wiem jak sie nazywa",
+        "wszystko w porządku",
+        "wszystko w porzadku",
+        "mówiłem o nazwę firmy",
+        "mowilem o nazwe firmy",
     )
     if any(fragment in normalized for fragment in bad_fragments):
         return True
@@ -294,6 +301,7 @@ def looks_like_invalid_company_name(value: str):
         "bardzo dziekuje", "dzień dobry", "dzien dobry", "cześć", "czesc",
         "do zobaczenia", "do widzenia", "co to jest", "dzwonię", "dzwonie",
         "szanowny", "no", "to jest", "yyy", "yyy yyy", "hmm",
+        "albo", "a tu", "a to",
     }
     if normalized in company_only_noise:
         return True
@@ -1109,6 +1117,8 @@ class CallSession:
             return "confirmation"
         if self.awaiting_correction and self.correction_field == "company":
             return "company"
+        if self.awaiting_company_phone_recovery:
+            return "contact"
         if self.awaiting_company:
             return "company"
         if self.awaiting_correction and self.correction_field == "contact":
@@ -1138,6 +1148,9 @@ class CallSession:
 
         if self.awaiting_correction and self.correction_field == "company":
             return "Dzwoniący podaje nazwę swojej firmy po polsku."
+
+        if self.awaiting_company_phone_recovery:
+            return "Numer telefonu. Cyfry od zera do dziewięciu."
 
         if self.awaiting_company:
             return "Dzwoniący podaje nazwę swojej firmy po polsku."
@@ -1377,12 +1390,12 @@ class CallSession:
 
             # Rejected phone speech is still a failed contact attempt. Do not
             # allow a different hallucination class to create an infinite loop.
-            if self.awaiting_contact and audio_seconds >= 0.50 and retry_reason != "short_rejected_audio":
+            if (self.awaiting_contact or self.awaiting_company_phone_recovery) and audio_seconds >= 0.50 and retry_reason != "short_rejected_audio":
                 self.contact_attempts += 1
                 if self.contact_attempts >= 2:
                     self.awaiting_contact_dtmf = True
                     self.dtmf_contact_buffer = ""
-                    self.dtmf_contact_context = "initial"
+                    self.dtmf_contact_context = "company_recovery" if self.awaiting_company_phone_recovery else "initial"
                     self.stt_misses = 0
                     await self.say(
                         "Nie udało mi się pewnie rozpoznać numeru. "
@@ -1923,7 +1936,7 @@ class CallSession:
             company_text = clean_company_display_name(text) or text.strip()
 
             if self.awaiting_company_phone_recovery:
-                numericish = bool(re.search(r"\d", text)) or phone
+                numericish = bool(re.search(r"\d", text)) or bool(phone)
                 if phone:
                     phone_customer, phone_score = match_customer("", phone, self.customer_directory)
                     if phone_customer:
@@ -1933,25 +1946,34 @@ class CallSession:
                         self.contact_trusted = True
                         self.mark_ticket_field("company", "directory", phone_score, True)
                         self.mark_ticket_field("contact", "directory", None, True)
+                        self.record_customer_match("company_recovery_phone", "", phone, phone_customer, phone_score)
                         self.awaiting_company_phone_recovery = False
                         self.awaiting_company = False
                         self.contact_attempts = 0
                         self.awaiting_problem = True
                         await self.say("Dziękuję. Proszę opisać problem.")
                         return
-                if numericish:
-                    self.contact_attempts += 1
-                    if self.contact_attempts >= 2:
-                        self.awaiting_contact_dtmf = True
-                        self.dtmf_contact_buffer = ""
-                        self.dtmf_contact_context = "company_recovery"
-                        await self.say(
-                            "Nie udało mi się odnaleźć firmy po numerze. "
-                            "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
-                        )
-                    else:
-                        await self.say("Nie znalazłem firmy po tym numerze. Proszę podać numer jeszcze raz.")
-                    return
+
+                # We explicitly asked for a phone number. Never reinterpret a
+                # non-number response as another company name; that created a
+                # recovery loop when callers said e.g. "momencik, nie pamiętam".
+                self.contact_attempts += 1
+                if self.contact_attempts >= 2:
+                    self.awaiting_contact_dtmf = True
+                    self.dtmf_contact_buffer = ""
+                    self.dtmf_contact_context = "company_recovery"
+                    await self.say(
+                        "Nie udało mi się pewnie rozpoznać numeru. "
+                        "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
+                    )
+                elif numericish:
+                    await self.say("Nie znalazłem firmy po tym numerze. Proszę podać numer jeszcze raz.")
+                else:
+                    await self.say(
+                        "Nie udało mi się rozpoznać numeru telefonu. "
+                        "Proszę podać numer albo wpisać go na klawiaturze telefonu."
+                    )
+                return
 
             if phone:
                 phone_customer, phone_score = match_customer("", phone, self.customer_directory)
