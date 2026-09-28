@@ -329,6 +329,33 @@ def looks_like_invalid_company_name(value: str):
     return False
 
 
+def looks_like_invalid_problem_description(value: str):
+    normalized = " ".join((value or "").lower().strip(" .,!?:;").split())
+    if not normalized:
+        return True
+    folded = normalized.translate(str.maketrans({
+        "ą": "a", "ć": "c", "ę": "e", "ł": "l",
+        "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z",
+    }))
+    if folded.startswith(("nazywam sie ", "mam na imie ", "jestem ")):
+        return True
+    bad_fragments = (
+        "dzwoniacy opisuje problem",
+        "dzieki za ogladanie",
+        "dziekuje za ogladanie",
+        "dzieki za uwage",
+        "arigatou gozaimasu",
+    )
+    if any(fragment in folded for fragment in bad_fragments):
+        return True
+    words = re.findall(r"[a-z0-9]+", folded)
+    polite = {
+        "dzien", "dobry", "dziekuje", "dzieki", "bardzo", "czesc",
+        "witam", "pozdrawiam", "do", "widzenia", "zobaczenia", "tak", "nie",
+    }
+    return bool(words) and all(word in polite for word in words)
+
+
 def looks_like_ticket_cancellation(text: str):
     """Detect an explicit request not to create / to abandon the ticket."""
     normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
@@ -734,6 +761,8 @@ class CallSession:
         self.awaiting_correction = False
         self.correction_field = ""
         self.correction_attempts = 0
+        self.correction_choice_misses = 0
+        self.correction_rejected_pending = False
         self.original_caller = ""
         self.caller_matched_customer = False
         self.awaiting_company = False
@@ -749,6 +778,7 @@ class CallSession:
         self.company_rejection_total = 0
         self.company_recognition_failures = 0
         self.early_problem_score = None
+        self.problem_recognition_failures = 0
         self.company_trusted = False
         self.contact_trusted = False
         self.contact_attempts = 0
@@ -861,6 +891,13 @@ class CallSession:
             return float(selected_score) >= threshold
         except (TypeError, ValueError):
             return False
+
+    def ticket_has_untrusted_fields(self):
+        for field in ("company", "contact", "description"):
+            meta = self.ticket_field_meta.get(field) or {}
+            if meta.get("trusted") is False:
+                return True
+        return False
 
     def can_auto_finalize(self, problem_score):
         return bool(
@@ -1093,6 +1130,12 @@ class CallSession:
             # verbatim by Whisper on very short telephone utterances.
             return "tak, nie"
 
+        if self.awaiting_correction and not self.correction_field:
+            # Field names are exactly what the caller is expected to say here;
+            # prompting Whisper with them caused valid "Opis problemu" to be
+            # rejected as prompt leakage.
+            return ""
+
         if self.awaiting_correction and self.correction_field == "company":
             return "Dzwoniący podaje nazwę swojej firmy po polsku."
 
@@ -1126,9 +1169,10 @@ class CallSession:
 
         if self.awaiting_confirmation_dtmf:
             for ch in chars:
-                if ch not in ("1", "2"):
-                    continue
                 mode = self.awaiting_confirmation_dtmf
+                allowed = ("1", "2", "3") if mode == "correction_choice" else ("1", "2")
+                if ch not in allowed:
+                    continue
                 self.awaiting_confirmation_dtmf = ""
                 self.confirmation_misses = 0
                 if mode == "company":
@@ -1160,12 +1204,25 @@ class CallSession:
                         else:
                             await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
                     return
+                if mode == "correction_choice":
+                    self.correction_choice_misses = 0
+                    self.awaiting_correction = True
+                    self.correction_field = {"1": "company", "2": "contact", "3": "description"}[ch]
+                    if self.correction_field == "company":
+                        await self.say("Proszę podać poprawną nazwę firmy.")
+                    elif self.correction_field == "contact":
+                        await self.say("Proszę podać poprawny numer telefonu kontaktowego.")
+                    else:
+                        await self.say("Proszę podać poprawny opis problemu.")
+                    return
                 if mode == "ticket":
                     if ch == "1":
                         self.confirmation_pending = False
                         await self.finalize_ticket()
                     else:
                         self.confirmation_pending = False
+                        self.correction_rejected_pending = True
+                        self.correction_choice_misses = 0
                         self.awaiting_correction = True
                         self.correction_field = "description" if self.caller_matched_customer else ""
                         if self.correction_field == "description":
@@ -1283,6 +1340,10 @@ class CallSession:
             audio_seconds = len(pcm) / 16000.0
             retry_reason = stt_result.get("retry_reason", "") if isinstance(stt_result, dict) else ""
 
+            if retry_reason == "residual_prompt_artifact":
+                log.info("[%s] Ignoring residual prompt artifact after TTS", self.call_id)
+                return
+
             # Real company speech that produced no usable transcript still counts
             # toward escaping the company-name loop. Ignore the ~0.6 s residual
             # prompt echo right after TTS.
@@ -1300,6 +1361,17 @@ class CallSession:
                     await self.say(
                         "Nie udało mi się pewnie rozpoznać nazwy firmy. "
                         "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
+                    )
+                    return
+
+            if self.awaiting_correction and not self.correction_field and audio_seconds >= 0.50:
+                self.correction_choice_misses += 1
+                if self.correction_choice_misses >= 2:
+                    self.correction_choice_misses = 0
+                    self.awaiting_confirmation_dtmf = "correction_choice"
+                    await self.say(
+                        "Proszę nacisnąć 1 dla nazwy firmy, 2 dla numeru kontaktowego "
+                        "albo 3 dla opisu problemu."
                     )
                     return
 
@@ -1442,6 +1514,21 @@ class CallSession:
             )
 
             if matches_confirmation_phrase(normalized, yes_phrases):
+                try:
+                    weak_yes = selected_score is not None and float(selected_score) < -0.45
+                except (TypeError, ValueError):
+                    weak_yes = False
+                try:
+                    weak_candidate = (
+                        self.company_candidate_score is not None
+                        and float(self.company_candidate_score) < float(self.settings.get("company_confirm_logprob", -0.55))
+                    )
+                except (TypeError, ValueError):
+                    weak_candidate = False
+                if weak_yes and weak_candidate:
+                    self.awaiting_confirmation_dtmf = "company"
+                    await self.say("Dla pewności proszę nacisnąć 1, jeśli tak, albo 2, jeśli nie.")
+                    return
                 self.ticket_data["company"] = self.company_candidate
                 self.company_trusted = True
                 self.mark_ticket_field("company", "confirmed_stt", self.company_candidate_score, True)
@@ -1595,6 +1682,14 @@ class CallSession:
             )
 
             if matches_confirmation_phrase(normalized, yes_phrases):
+                try:
+                    weak_yes = selected_score is not None and float(selected_score) < -0.45
+                except (TypeError, ValueError):
+                    weak_yes = False
+                if weak_yes and self.ticket_has_untrusted_fields():
+                    self.awaiting_confirmation_dtmf = "ticket"
+                    await self.say("Dla pewności proszę nacisnąć 1, jeśli dane są poprawne, albo 2, jeśli nie.")
+                    return
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 await self.finalize_ticket()
@@ -1603,6 +1698,8 @@ class CallSession:
             if matches_confirmation_phrase(normalized, no_phrases):
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
+                self.correction_rejected_pending = True
+                self.correction_choice_misses = 0
                 self.awaiting_correction = True
                 self.awaiting_company = False
                 self.awaiting_contact = False
@@ -1648,18 +1745,30 @@ class CallSession:
                 choices = sum((company_choice, contact_choice, description_choice))
 
                 if choices == 1 and company_choice:
+                    self.correction_choice_misses = 0
                     self.correction_field = "company"
                     await self.say("Proszę podać poprawną nazwę firmy.")
                     return
                 if choices == 1 and contact_choice:
+                    self.correction_choice_misses = 0
                     self.correction_field = "contact"
                     await self.say("Proszę podać poprawny numer telefonu kontaktowego.")
                     return
                 if choices == 1 and description_choice:
+                    self.correction_choice_misses = 0
                     self.correction_field = "description"
                     await self.say("Proszę podać poprawny opis problemu.")
                     return
 
+                self.correction_choice_misses += 1
+                if self.correction_choice_misses >= 2:
+                    self.correction_choice_misses = 0
+                    self.awaiting_confirmation_dtmf = "correction_choice"
+                    await self.say(
+                        "Proszę nacisnąć 1 dla nazwy firmy, 2 dla numeru kontaktowego "
+                        "albo 3 dla opisu problemu."
+                    )
+                    return
                 await self.say(
                     "Proszę powiedzieć, co mam poprawić: nazwę firmy, numer kontaktowy albo opis problemu."
                 )
@@ -1742,6 +1851,32 @@ class CallSession:
                         self.mark_ticket_field("contact", "directory", None, True)
 
             elif self.correction_field == "description":
+                invalid_problem = looks_like_invalid_problem_description(text)
+                try:
+                    very_low_problem = selected_score is not None and float(selected_score) < -0.80
+                except (TypeError, ValueError):
+                    very_low_problem = False
+                if invalid_problem or very_low_problem:
+                    self.problem_recognition_failures += 1
+                    if self.problem_recognition_failures < 2:
+                        await self.say("Nie udało mi się wiarygodnie rozpoznać opisu problemu. Proszę powtórzyć.")
+                        return
+                    replacement = (
+                        "Opis problemu nierozpoznany – zweryfikować"
+                        if invalid_problem else text.strip()
+                    )
+                    self.ticket_data["description"] = replacement
+                    self.mark_ticket_field("description", "stt_uncertain", selected_score, False)
+                    self.ticket_data["title"] = replacement[:80]
+                    self.awaiting_correction = False
+                    self.correction_field = ""
+                    self.correction_rejected_pending = False
+                    await self.finalize_ticket(
+                        uncertain=True,
+                        warning_text="UWAGA: Poprawiony opis problemu pozostał niepewny po dwóch próbach."
+                    )
+                    return
+                self.problem_recognition_failures = 0
                 if looks_like_human_handoff_request(text):
                     await self.say(
                         "Mogę przyjąć zgłoszenie dla serwisu. "
@@ -1767,6 +1902,7 @@ class CallSession:
 
             self.awaiting_correction = False
             self.correction_field = ""
+            self.correction_rejected_pending = False
             self.correction_attempts += 1
 
             if self.correction_attempts >= 3:
@@ -2068,6 +2204,32 @@ class CallSession:
                 )
                 return
 
+            invalid_problem = looks_like_invalid_problem_description(text)
+            try:
+                very_low_problem = selected_score is not None and float(selected_score) < -0.80
+            except (TypeError, ValueError):
+                very_low_problem = False
+            if invalid_problem or very_low_problem:
+                self.problem_recognition_failures += 1
+                if self.problem_recognition_failures < 2:
+                    await self.say("Nie udało mi się wiarygodnie rozpoznać opisu problemu. Proszę powtórzyć.")
+                    return
+                description = (
+                    "Opis problemu nierozpoznany – zweryfikować"
+                    if invalid_problem else text.strip()
+                )
+                self.ticket_data["description"] = description
+                self.early_problem_score = selected_score
+                self.mark_ticket_field("description", "stt_uncertain", selected_score, False)
+                self.awaiting_problem = False
+                self.ticket_data["title"] = description[:80]
+                if self.has_complete_ticket_data():
+                    await self.finalize_ticket(
+                        uncertain=True,
+                        warning_text="UWAGA: Opis problemu pozostał niepewny po dwóch próbach."
+                    )
+                    return
+            self.problem_recognition_failures = 0
             self.ticket_data["description"] = text.strip()
             self.early_problem_score = selected_score
             self.mark_ticket_field("description", "stt", selected_score, self.problem_confidence_is_high(selected_score))
@@ -2339,6 +2501,8 @@ async def handle_client(reader, writer):
             and session.has_complete_ticket_data()
             and session.final_status not in ("completed", "completed_uncertain", "icp_error", "caller_cancelled")
             and not session.cancellation_suspected
+            and not session.correction_rejected_pending
+            and not session.awaiting_correction
         ):
             await session.finalize_ticket(
                 uncertain=True,
