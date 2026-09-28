@@ -5,6 +5,7 @@ from app.audiosocket import (
     clean_company_display_name,
     extract_phone_digits,
     looks_like_invalid_company_name,
+    looks_like_ticket_cancellation,
     match_customer,
     matches_confirmation_phrase,
     parse_customer_directory,
@@ -82,6 +83,20 @@ class AudioSocketRegressionTests(unittest.TestCase):
         self.assertEqual(clean_company_display_name("Dzień dobry, tu firma Alfatest"), "Alfatest")
         self.assertEqual(clean_company_display_name("Spółka Alfa Med"), "Alfa Med")
         self.assertEqual(clean_company_display_name("Alfa Firma Serwis"), "Alfa Firma Serwis")
+
+    def test_ticket_cancellation_tolerates_observed_stt_distortions(self):
+        self.assertTrue(looks_like_ticket_cancellation(
+            "Właściwie to już zaczęło działać. Proszę unie zakładać zgłoszenia."
+        ))
+        self.assertTrue(looks_like_ticket_cancellation(
+            "Proszę omułować zgłoszenie. Już nie jest potrzebne."
+        ))
+        self.assertTrue(looks_like_ticket_cancellation(
+            "Wie pan co? Prozygnuje ze zgłuszenia, sam to sprawdzi."
+        ))
+        self.assertFalse(looks_like_ticket_cancellation(
+            "Zgłoszenie jest potrzebne, proszę je zapisać."
+        ))
 
     def test_extract_phone_digits(self):
         self.assertEqual(extract_phone_digits("792-032-104"), "792032104")
