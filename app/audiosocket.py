@@ -759,7 +759,10 @@ class CallSession:
                             "contact": str(ticket.get("contact", "") or ""),
                             "description": str(ticket.get("description", "") or ""),
                             "uncertain": bool(uncertain),
-                            "field_meta": dict(self.ticket_field_meta),
+                            "field_meta": {
+                                field: dict(self.ticket_field_meta.get(field, {"source": "unknown"}))
+                                for field in ("company", "contact", "description")
+                            },
                         },
                         ensure_ascii=False,
                     ),
@@ -1518,6 +1521,12 @@ class CallSession:
                 if deterministic_problem and not self.ticket_data.get("description"):
                     self.ticket_data["description"] = deterministic_problem
                     self.early_problem_score = selected_score
+                    self.mark_ticket_field(
+                        "description",
+                        "stt",
+                        selected_score,
+                        self.problem_confidence_is_high(selected_score),
+                    )
 
                 interpreted = await self.interpret_fallback("nazwa firmy", text)
                 if interpreted.get("blocked"):
@@ -1750,7 +1759,14 @@ class CallSession:
 
         # General LLM fallback is fill-only. It may add a missing field but it
         # may NEVER overwrite data already collected for this call.
+        before_fill = {
+            key: str(self.ticket_data.get(key, "") or "")
+            for key in ("company", "contact", "description")
+        }
         apply_llm_fill_only(self.ticket_data, ticket_update)
+        for field in ("company", "contact", "description"):
+            if not before_fill[field] and str(self.ticket_data.get(field, "") or "").strip():
+                self.mark_ticket_field(field, "llm_fallback", None, False)
 
         # Normalize contact phone numbers recognized with spaces, commas or dashes.
         contact_value = str(self.ticket_data.get("contact", "") or "")
