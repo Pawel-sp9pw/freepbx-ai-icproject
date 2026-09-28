@@ -298,9 +298,10 @@ def looks_like_invalid_company_name(value: str):
         if len(words) >= 3 and all(word in filler_words for word in words):
             return True
         polite_or_speech_words = {
-            "bardzo", "dziekuje", "dziękuję", "dzwonie", "dzwonię",
+            "bardzo", "dziekuje", "dziękuję", "dzieki", "dzięki",
+            "dzwonie", "dzwonię", "dzwoniacy", "dzwoniący", "dzwoncy",
             "dzien", "dzień", "dobry", "czesc", "cześć", "szanowny",
-            "co", "to", "jest",
+            "co", "to", "jest", "tak", "no", "a",
         }
         if words and all(word in polite_or_speech_words for word in words):
             return True
@@ -506,6 +507,48 @@ def company_without_phone(value: str):
     return cleaned.strip()
 
 
+def extract_company_fragment(text: str, directory: list | None = None):
+    """Extract a likely company/name fragment from a mixed company+problem utterance."""
+    source = " ".join((text or "").strip().split())
+    if not source:
+        return ""
+
+    problem = extract_problem_fragment(source)
+    prefix = source
+    if problem:
+        pos = source.lower().find(problem.lower())
+        if pos >= 0:
+            prefix = source[:pos]
+
+    prefix = re.sub(
+        r"^\s*(?:dzień dobry|dzien dobry|dobry wieczór|dobry wieczor|cześć|czesc|witam)[,.:;\-\s]*",
+        "",
+        prefix,
+        flags=re.IGNORECASE,
+    )
+    prefix = re.sub(r"\b(?:tu|z tej strony|firma|spółka|spolka)\b", " ", prefix, flags=re.IGNORECASE)
+    prefix = re.sub(r"\b(?:jest|jesteśmy|jestesmy)\b", " ", prefix, flags=re.IGNORECASE)
+    prefix = re.sub(r"\s+", " ", prefix).strip(" ,.;:-")
+
+    if directory:
+        tokens = re.findall(r"[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż0-9]+", prefix)
+        best = None
+        best_score = 0.0
+        # Try contiguous n-grams; mixed utterances often contain extra filler
+        # before/after the company name that hurts matching of the whole prefix.
+        for size in range(min(5, len(tokens)), 0, -1):
+            for start in range(0, len(tokens) - size + 1):
+                candidate = " ".join(tokens[start:start + size])
+                matched, score = match_customer(candidate, "", directory)
+                if matched and score > best_score:
+                    best = matched
+                    best_score = score
+        if best:
+            return str(best.get("name", "") or "").strip()
+
+    return clean_company_display_name(prefix) or prefix
+
+
 def extract_problem_fragment(text: str):
     """Extract an explicit technical-problem fragment from a mixed utterance.
 
@@ -648,6 +691,7 @@ class CallSession:
         self.company_candidate_phone = ""
         self.rejected_company_names = set()
         self.rejected_company_counts = {}
+        self.company_rejection_total = 0
         self.early_problem_score = None
         self.company_trusted = False
         self.contact_trusted = False
@@ -1303,6 +1347,7 @@ class CallSession:
                     self.rejected_company_counts[rejected_normalized] = (
                         self.rejected_company_counts.get(rejected_normalized, 0) + 1
                     )
+                    self.company_rejection_total += 1
                 if (
                     rejected_normalized
                     and normalize_company(str(self.ticket_data.get("company", "") or "")) == rejected_normalized
@@ -1315,10 +1360,11 @@ class CallSession:
                 self.company_confirmation_context = ""
                 self.company_candidate_phone = ""
                 rejected_count = self.rejected_company_counts.get(rejected_normalized, 0)
+                should_recover_by_phone = rejected_count >= 2 or self.company_rejection_total >= 2
                 if context == "correction":
                     self.awaiting_correction = True
                     self.correction_field = "company"
-                    if rejected_count >= 2:
+                    if should_recover_by_phone:
                         await self.say(
                             "Ta nazwa została już dwa razy odrzucona. "
                             "Proszę podać inną nazwę firmy."
@@ -1327,7 +1373,7 @@ class CallSession:
                         await self.say("Dobrze. Proszę podać poprawną nazwę firmy jeszcze raz.")
                 else:
                     self.awaiting_company = True
-                    if rejected_count >= 2:
+                    if should_recover_by_phone:
                         await self.say(
                             "Ta nazwa została już dwa razy odrzucona. "
                             "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
@@ -1592,20 +1638,10 @@ class CallSession:
                         self.problem_confidence_is_high(selected_score),
                     )
 
-                interpreted = await self.interpret_fallback("nazwa firmy", text)
-                if interpreted.get("blocked"):
-                    await self.refuse_out_of_scope()
-                    return
-                if interpreted.get("company"):
-                    company_text = clean_company_display_name(str(interpreted["company"])) or str(interpreted["company"]).strip()
-                if interpreted.get("contact") and not phone:
-                    phone = extract_phone_digits(
-                        str(interpreted["contact"]),
-                        self.settings.get("phone_validation_mode", "pl"),
-                    )
-                if interpreted.get("description") and not self.ticket_data.get("description"):
-                    self.ticket_data["description"] = str(interpreted["description"]).strip()
-                    self.early_problem_score = selected_score
+                # Keep this hot path deterministic. Calling the local LLM here
+                # previously added up to ~41 s despite company/problem already
+                # being extractable from the utterance.
+                company_text = extract_company_fragment(text, self.customer_directory)
 
             matched_customer, match_score = match_customer(
                 company_text,
@@ -1630,7 +1666,7 @@ class CallSession:
                 normalized_candidate = normalize_company(company_text)
                 was_rejected = normalized_candidate in self.rejected_company_names
                 rejected_count = self.rejected_company_counts.get(normalized_candidate, 0)
-                if was_rejected and rejected_count >= 2:
+                if self.company_rejection_total >= 2 or (was_rejected and rejected_count >= 2):
                     self.awaiting_company = True
                     await self.say(
                         "Ta nazwa była już odrzucona. "
