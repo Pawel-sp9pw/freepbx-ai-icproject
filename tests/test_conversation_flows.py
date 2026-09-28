@@ -138,6 +138,8 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         await h.user("Nie działa drukarka", score=-0.20)
         self.assertEqual(h.session.ticket_field_meta["description"]["source"], "stt")
         self.assertTrue(h.session.ticket_field_meta["description"]["trusted"])
+        for field in ("company", "contact", "description"):
+            self.assertNotEqual(h.session.ticket_field_meta[field]["source"], "unknown")
 
     async def test_recognized_caller_problem_yes_creates_ticket(self):
         h = ConversationHarness()
@@ -452,6 +454,95 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.ticket_data["contact"], "343295351")
         self.assertEqual(h.session.ticket_field_meta["contact"]["source"], "directory")
         self.assertTrue(h.session.ticket_field_meta["contact"]["trusted"])
+
+    async def test_two_rejected_contact_stt_results_switch_to_dtmf(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company": "Alfatest"}
+        h.session.company_trusted = True
+        await h.start()
+
+        rejected = {
+            "selected": "",
+            "selected_score": None,
+            "mode": "contact",
+            "audio_seconds": 2.0,
+            "model": "small",
+            "pass1": {"text": "Numer telefonu.", "score": -0.6, "rejected": True, "reason": "prompt_leak"},
+            "pass2": None,
+            "retry": True,
+            "retry_reason": "prompt_leak",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=rejected), \
+             patch.object(audiosocket, "add_message", return_value=None), \
+             patch.object(audiosocket.asyncio, "sleep", new=_no_sleep):
+            await h.session.process_utterance(b"\x00" * 32000)
+            await h.session.process_utterance(b"\x00" * 32000)
+
+        self.assertTrue(h.session.awaiting_contact_dtmf)
+        self.assertTrue(any("klawiaturze telefonu" in x.lower() for x in h.spoken))
+
+    async def test_ambiguous_confirmation_never_uses_llm(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Alfatest",
+            "contact": "600100200",
+            "description": "Nie działa drukarka",
+        }
+        h.session.confirmation_pending = True
+        h.session.awaiting_company = False
+
+        async def fail_fallback(*args, **kwargs):
+            raise AssertionError("LLM must not be called for ambiguous confirmation")
+        h.session.interpret_fallback = fail_fallback
+
+        await h.user("chyba", score=-0.5)
+
+        self.assertTrue(h.session.confirmation_pending)
+        self.assertFalse(h.session.awaiting_correction)
+        self.assertTrue(any("tak albo nie" in x.lower() for x in h.spoken))
+
+    async def test_correction_field_inflections_are_deterministic_without_llm(self):
+        for utterance, expected in (
+            ("Nazwę firmy.", "company"),
+            ("Firmę.", "company"),
+            ("Numer telefonu.", "contact"),
+            ("Kontakt.", "contact"),
+            ("Opis problemu.", "description"),
+        ):
+            h = ConversationHarness()
+            h.session.ticket_data = {
+                "company": "Alfatest",
+                "contact": "600100200",
+                "description": "Nie działa drukarka",
+            }
+            h.session.awaiting_correction = True
+            h.session.correction_field = ""
+            h.session.awaiting_company = False
+
+            async def fail_fallback(*args, **kwargs):
+                raise AssertionError("LLM must not be called for correction field selection")
+            h.session.interpret_fallback = fail_fallback
+
+            await h.user(utterance, score=-0.2)
+            self.assertEqual(h.session.correction_field, expected, utterance)
+
+    async def test_after_two_rejections_same_company_agent_requests_phone_recovery(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Marcin", "phone": "608411319"}]
+        await h.start()
+
+        await h.user("Dzwon", score=-0.80)
+        await h.user("nie", score=-0.10)
+        await h.user("Dzwon", score=-0.80)
+        await h.user("nie", score=-0.10)
+
+        self.assertTrue(h.session.awaiting_company)
+        self.assertTrue(any("numer telefonu kontaktowego" in x.lower() for x in h.spoken))
+
+        await h.user("608411319", score=-0.2)
+        self.assertEqual(h.session.ticket_data["company"], "Marcin")
+        self.assertEqual(h.session.ticket_data["contact"], "608411319")
+        self.assertTrue(h.session.awaiting_problem)
 
     async def test_second_failed_phone_attempt_switches_to_dtmf(self):
         h = ConversationHarness()
