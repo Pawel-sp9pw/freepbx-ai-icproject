@@ -345,6 +345,7 @@ def transcribe_pcm16(
     mode="normal",
     return_metadata=False,
     num_workers=1,
+    log_context="",
 ):
     prepared_pcm, prepared_rate = _prepare_phone_audio(pcm, sample_rate)
 
@@ -402,7 +403,8 @@ def transcribe_pcm16(
         if first_bad:
             if first_text:
                 log.warning(
-                    "Rejected STT pass 1 (%s, %.2fs, score=%s): %s",
+                    "%sRejected STT pass 1 (%s, %.2fs, score=%s): %s",
+                    f"[{log_context}] " if log_context else "",
                     first_reason,
                     audio_seconds,
                     f"{first_score:.3f}" if first_score is not None else "n/a",
@@ -473,7 +475,8 @@ def transcribe_pcm16(
             if second_bad:
                 if second_text:
                     log.warning(
-                        "Rejected STT pass 2 (%s, %.2fs, score=%s): %s",
+                        "%sRejected STT pass 2 (%s, %.2fs, score=%s): %s",
+                        f"[{log_context}] " if log_context else "",
                         second_reason,
                         audio_seconds,
                         f"{second_score:.3f}" if second_score is not None else "n/a",
@@ -489,7 +492,8 @@ def transcribe_pcm16(
             )
             if second_text and second_text != first_text:
                 log.info(
-                    "Adaptive STT %s: pass1=%r (%s), pass2=%r (%s), selected=%r",
+                    "%sAdaptive STT %s: pass1=%r (%s), pass2=%r (%s), selected=%r",
+                    f"[{log_context}] " if log_context else "",
                     mode,
                     first_text,
                     f"{first_score:.3f}" if first_score is not None else "n/a",
