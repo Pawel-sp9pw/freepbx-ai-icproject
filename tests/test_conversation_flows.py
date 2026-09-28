@@ -39,6 +39,7 @@ class ConversationHarness:
             "stt_prompt": "",
             "stt_problem_hint": "Problem może dotyczyć e-recepty, P1, NFZ, faktur i drukarki fiskalnej.",
             "company_confirm_logprob": -0.55,
+            "contact_auto_accept_logprob": -0.30,
             "problem_auto_accept_logprob": -0.30,
             "phone_validation_mode": "pl",
             "max_turns": 12,
@@ -137,6 +138,9 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             "company": "Paweł",
             "contact": "792032104",
         }
+        h.session.caller_matched_customer = True
+        h.session.company_trusted = True
+        h.session.contact_trusted = True
 
         await h.start()
         await h.user("Nie działa wystawianie recept", score=-0.20)
@@ -271,6 +275,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_company_and_problem_in_one_utterance_are_not_asked_twice(self):
         h = ConversationHarness()
         h.session.ticket_data = {"contact": "790205140"}
+        h.session.contact_trusted = True
 
         async def fallback(expected, text):
             return {
@@ -348,6 +353,97 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             h.saved[0]["ticket"]["description"],
             "Nie działa drukarka fiskalna",
         )
+
+    async def test_low_confidence_contact_prevents_auto_save(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Alfatest", score=-0.20)
+        await h.user("600 100 200", score=-0.55)
+        await h.user("Nie działa drukarka", score=-0.20)
+
+        self.assertEqual(h.saved, [])
+        self.assertTrue(h.session.confirmation_pending)
+        self.assertTrue(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
+
+    async def test_company_prefix_is_not_repeated_in_confirmation(self):
+        h = ConversationHarness()
+        await h.start()
+
+        await h.user("Firma Alpha Pist", score=-0.80)
+
+        self.assertTrue(h.session.company_confirmation_pending)
+        self.assertEqual(h.session.company_candidate, "Alpha Pist")
+        self.assertTrue(any("firma alpha pist" in x.lower() for x in h.spoken))
+        self.assertFalse(any("firma firma" in x.lower() for x in h.spoken))
+
+    async def test_second_failed_phone_attempt_switches_to_dtmf(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company": "Alfatest"}
+        h.session.company_trusted = True
+
+        async def fallback(expected, text):
+            return {
+                "intent": "unknown",
+                "company": "",
+                "contact": "",
+                "description": "",
+                "blocked": False,
+            }
+
+        h.session.interpret_fallback = fallback
+        await h.start()
+
+        await h.user("niezrozumiały numer")
+        self.assertFalse(h.session.awaiting_contact_dtmf)
+        await h.user("nadal źle")
+
+        self.assertTrue(h.session.awaiting_contact_dtmf)
+        self.assertTrue(any("klawiaturze telefonu" in x.lower() for x in h.spoken))
+
+        await h.session.handle_dtmf(b"600100200#")
+        self.assertEqual(h.session.ticket_data["contact"], "600100200")
+        self.assertTrue(h.session.contact_trusted)
+        self.assertTrue(h.session.awaiting_problem)
+
+    async def test_rejected_real_utterance_gets_immediate_repeat_prompt(self):
+        h = ConversationHarness()
+        await h.start()
+        result = {
+            "selected": "",
+            "selected_score": None,
+            "mode": "company",
+            "audio_seconds": 1.2,
+            "model": "small",
+            "pass1": {"text": "Dzień dobry", "score": -1.1, "rejected": True, "reason": "low_confidence"},
+            "pass2": None,
+            "retry": False,
+            "retry_reason": "low_confidence",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=result),              patch.object(audiosocket, "add_message", return_value=None):
+            await h.session.process_utterance(b"\x00" * 19200)
+
+        self.assertTrue(any("nie dosłyszałem" in x.lower() for x in h.spoken))
+
+    async def test_short_prompt_leak_stays_silent(self):
+        h = ConversationHarness()
+        await h.start()
+        before = len(h.spoken)
+        result = {
+            "selected": "",
+            "selected_score": None,
+            "mode": "company",
+            "audio_seconds": 0.6,
+            "model": "small",
+            "pass1": {"text": "prompt", "score": -0.1, "rejected": True, "reason": "prompt_leak"},
+            "pass2": None,
+            "retry": False,
+            "retry_reason": "short_rejected_audio",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=result),              patch.object(audiosocket, "add_message", return_value=None):
+            await h.session.process_utterance(b"\x00" * 9600)
+
+        self.assertEqual(len(h.spoken), before)
 
     async def test_invalid_11_digit_contact_is_rejected(self):
         h = ConversationHarness()
