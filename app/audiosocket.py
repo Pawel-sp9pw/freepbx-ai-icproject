@@ -575,6 +575,7 @@ class CallSession:
         self.company_candidate_score = None
         self.company_confirmation_context = ""
         self.company_candidate_phone = ""
+        self.rejected_company_names = set()
         self.early_problem_score = None
         self.company_trusted = False
         self.contact_trusted = False
@@ -1133,6 +1134,16 @@ class CallSession:
 
             if matches_confirmation_phrase(normalized, no_phrases):
                 context = self.company_confirmation_context
+                rejected_candidate = self.company_candidate
+                rejected_normalized = normalize_company(rejected_candidate)
+                if rejected_normalized:
+                    self.rejected_company_names.add(rejected_normalized)
+                if (
+                    rejected_normalized
+                    and normalize_company(str(self.ticket_data.get("company", "") or "")) == rejected_normalized
+                    and not self.company_trusted
+                ):
+                    self.ticket_data.pop("company", None)
                 self.company_confirmation_pending = False
                 self.company_candidate = ""
                 self.company_candidate_score = None
@@ -1453,7 +1464,8 @@ class CallSession:
                     selected_score is not None
                     and float(selected_score) < confirm_threshold
                 )
-                if low_confidence:
+                was_rejected = normalize_company(company_text) in self.rejected_company_names
+                if low_confidence or was_rejected:
                     self.company_confirmation_pending = True
                     self.company_candidate = company_text
                     self.company_candidate_score = float(selected_score)
