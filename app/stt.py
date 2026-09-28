@@ -19,6 +19,8 @@ PROMPT_LEAK_PHRASES = (
     "krotka odpowiedz na pytanie o potwierdzenie",
     "dzwoniący podaje nazwę swojej firmy po polsku",
     "dzwoniacy podaje nazwe swojej firmy po polsku",
+    "dzwoniący podaje nazwę swojej firmy",
+    "dzwoniacy podaje nazwe swojej firmy",
     "dzwoniący opisuje problem techniczny lub usterkę po polsku",
     "dzwoniacy opisuje problem techniczny lub usterke po polsku",
 )
@@ -69,6 +71,17 @@ def get_model(name: str, device: str, compute_type: str, num_workers: int = 1):
             cpu_threads if device == "cpu" else "n/a",
         )
     return _models[key]
+
+
+def _looks_like_numeric_contact_text(text: str):
+    """Return True for phone-like transcripts containing only digits/separators."""
+    clean = (text or "").strip()
+    if not clean:
+        return False
+    if not re.fullmatch(r"[0-9\s.,()+\-]+", clean):
+        return False
+    digits = re.sub(r"\D", "", clean)
+    return 9 <= len(digits) <= 13
 
 
 def _contact_language_reason(text: str):
@@ -385,7 +398,10 @@ def transcribe_pcm16(
             patience=1.10,
             max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
         )
-        first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
+        if mode == "contact" and _looks_like_numeric_contact_text(first_text):
+            first_bad, first_reason = False, ""
+        else:
+            first_bad, first_reason = _looks_hallucinated(first_text, audio_seconds)
         if not first_bad and mode == "contact":
             language_reason = _contact_language_reason(first_text)
             if language_reason:
@@ -457,7 +473,10 @@ def transcribe_pcm16(
                 patience=1.30,
                 max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
             )
-            second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
+            if mode == "contact" and _looks_like_numeric_contact_text(second_text):
+                second_bad, second_reason = False, ""
+            else:
+                second_bad, second_reason = _looks_hallucinated(second_text, audio_seconds)
             if not second_bad and mode == "contact":
                 language_reason = _contact_language_reason(second_text)
                 if language_reason:
