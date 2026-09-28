@@ -602,11 +602,15 @@ class CallSession:
             "company_trusted": bool(self.company_trusted),
             "contact_trusted": bool(self.contact_trusted),
         }
-        add_message(
-            self.call_id,
-            "match_debug",
-            json.dumps(payload, ensure_ascii=False),
-        )
+        try:
+            add_message(
+                self.call_id,
+                "match_debug",
+                json.dumps(payload, ensure_ascii=False),
+            )
+        except Exception:
+            # Diagnostic telemetry must never break the active phone call.
+            log.warning("[%s] Could not persist customer match telemetry", self.call_id, exc_info=True)
 
     async def say(self, text):
         log.info("[%s] TTS: %s", self.call_id, text)
