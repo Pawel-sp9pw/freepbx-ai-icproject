@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from .config import load_settings, save_settings, encrypt_secret, decrypt_secret
 from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
+from .stt import get_model
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
 from .monitoring import init_db, runtime_status, service_status, linux_resource_status, resource_history, list_calls, get_call, get_recent_calls_with_messages
 from .call_registry import register_caller, last_registration
@@ -76,11 +77,27 @@ def ensure_callerid_api_key():
         save_settings({"callerid_api_key": key})
     return key
 
+async def _prewarm_whisper():
+    try:
+        s = load_settings()
+        await asyncio.to_thread(
+            get_model,
+            s.get("whisper_model", "medium"),
+            s.get("whisper_device", "cpu"),
+            s.get("whisper_compute_type", "int8"),
+            int(s.get("stt_workers", 2) or 2),
+        )
+        logging.getLogger("main").info("Whisper model pre-warmed")
+    except Exception:
+        logging.getLogger("main").exception("Whisper pre-warm failed; lazy load will remain available")
+
+
 @app.on_event("startup")
 async def startup():
     init_db()
     ensure_callerid_api_key()
     asyncio.create_task(start_audiosocket_server())
+    asyncio.create_task(_prewarm_whisper())
 
 @app.get("/api/health")
 async def health():
