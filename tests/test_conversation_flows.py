@@ -205,6 +205,50 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(h.session.confirmation_pending)
         self.assertTrue(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
 
+    async def test_company_phone_recovery_uses_contact_stt_mode_and_prompt(self):
+        h = ConversationHarness()
+        await h.start()
+        h.session.awaiting_company = True
+        h.session.awaiting_company_phone_recovery = True
+
+        self.assertEqual(h.session.stt_mode_for_state(), "contact")
+        self.assertIn("numer telefonu", h.session.stt_prompt_for_state().lower())
+
+    async def test_company_phone_recovery_non_number_does_not_become_company(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Kardiologia PULSMED", "phone": "693693970"}]
+        await h.start()
+        h.session.awaiting_company = True
+        h.session.awaiting_company_phone_recovery = True
+        h.session.company_rejection_total = 2
+
+        await h.user("Momencik, nie pamiętam dokładnie swojego numeru.", score=-0.20)
+        self.assertTrue(h.session.awaiting_company_phone_recovery)
+        self.assertNotIn("company", h.session.ticket_data)
+        self.assertEqual(h.session.contact_attempts, 1)
+
+        await h.user("Chwileczkę, muszę go sprawdzić w telefonie.", score=-0.20)
+        self.assertTrue(h.session.awaiting_contact_dtmf)
+        self.assertEqual(h.session.dtmf_contact_context, "company_recovery")
+
+        await h.session.handle_dtmf(b"693693970#")
+        self.assertEqual(h.session.ticket_data["company"], "Kardiologia PULSMED")
+        self.assertEqual(h.session.ticket_data["contact"], "693693970")
+        self.assertTrue(h.session.awaiting_problem)
+
+    async def test_observed_generic_phrases_are_invalid_company_names(self):
+        samples = [
+            "Nie wiem.",
+            "Nie wiem, jak się nazywa.",
+            "Wszystko w porządku.",
+            "Mówiłem o nazwę firmy.",
+            "A tu...",
+            "A to.",
+            "Albo...",
+        ]
+        for sample in samples:
+            self.assertTrue(audiosocket.looks_like_invalid_company_name(sample), sample)
+
     async def test_company_prompt_is_sentence_not_keyword_list(self):
         h = ConversationHarness()
         await h.start()
