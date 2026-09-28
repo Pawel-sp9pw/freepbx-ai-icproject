@@ -23,6 +23,27 @@ class FakeModel:
 
 
 class AdaptiveSTTTests(unittest.TestCase):
+    def test_hotwords_are_passed_without_initial_prompt(self):
+        model = FakeModel([("Kardiologia PULSMED", -0.20)])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 16000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="",
+                mode="company",
+                return_metadata=True,
+                hotwords="Kardiologia PULSMED Przychodnia Vena",
+            )
+        self.assertEqual(result["selected"], "Kardiologia PULSMED")
+        self.assertIsNone(model.calls[0]["initial_prompt"])
+        self.assertEqual(
+            model.calls[0]["hotwords"],
+            "Kardiologia PULSMED Przychodnia Vena",
+        )
+
     def test_known_subtitle_hallucinations_are_rejected(self):
         samples = [
             "www.youtube.com www.youtube.com",
