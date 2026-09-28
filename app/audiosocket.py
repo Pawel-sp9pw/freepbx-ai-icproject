@@ -1083,7 +1083,7 @@ class CallSession:
                     if self.ticket_data.get("contact"):
                         self.awaiting_contact = False
                         self.awaiting_problem = False
-                        if self.problem_confidence_is_high(self.early_problem_score):
+                        if self.can_auto_finalize(self.early_problem_score):
                             await self.finalize_ticket()
                         else:
                             self.confirmation_pending = True
@@ -1270,6 +1270,7 @@ class CallSession:
                 matched_customer, _ = match_customer(company_text, "", self.customer_directory)
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
+                    self.company_trusted = True
                 else:
                     confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                     low_confidence = (
@@ -1318,8 +1319,10 @@ class CallSession:
                 )
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
+                    self.company_trusted = True
                     if matched_customer.get("phone"):
                         self.ticket_data["contact"] = matched_customer["phone"]
+                        self.contact_trusted = True
 
             elif self.correction_field == "description":
                 if looks_like_human_handoff_request(text):
@@ -1521,7 +1524,7 @@ class CallSession:
                     self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
 
                 self.awaiting_problem = False
-                if self.problem_confidence_is_high(self.early_problem_score):
+                if self.can_auto_finalize(self.early_problem_score):
                     await self.finalize_ticket()
                 else:
                     self.confirmation_pending = True
@@ -1692,7 +1695,7 @@ class CallSession:
             description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
 
             self.awaiting_correction = False
-            if self.problem_confidence_is_high(selected_score):
+            if self.can_auto_finalize(selected_score):
                 self.confirmation_pending = False
                 self.confirmation_misses = 0
                 await self.finalize_ticket()
