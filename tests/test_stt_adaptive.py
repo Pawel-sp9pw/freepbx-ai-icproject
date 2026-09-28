@@ -157,6 +157,60 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertEqual(result["pass1"]["reason"], "prompt_leak")
         self.assertEqual(result["retry_reason"], "short_rejected_audio")
 
+    def test_repeated_no_is_not_rejected_as_confirmation_prompt_echo(self):
+        model = FakeModel([("nie nie nie nie", -1.20)])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 24000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="tak, nie",
+                mode="confirmation",
+                return_metadata=True,
+            )
+        self.assertEqual(result["selected"], "nie nie nie nie")
+        self.assertFalse(result["pass1"]["rejected"])
+
+    def test_problem_prompt_leak_short_variant_is_rejected(self):
+        model = FakeModel([
+            ("Dzwoniący opisuje problem.", -0.60),
+            ("Dzięki za oglądanie!", -0.90),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * int(16000 * 1.0),
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący opisuje problem techniczny lub usterkę po polsku.",
+                mode="problem",
+                return_metadata=True,
+            )
+        self.assertEqual(result["selected"], "")
+        self.assertTrue(result["pass1"]["rejected"])
+
+    def test_one_second_company_prompt_artifact_gets_special_retry_reason(self):
+        model = FakeModel([
+            ("Dzwoniący podaje nazwę swojej firmy po polsku.", -0.20),
+            ("Dzięki za oglądanie!", -0.95),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * int(16000 * 1.0),
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Dzwoniący podaje nazwę swojej firmy po polsku.",
+                mode="company",
+                return_metadata=True,
+            )
+        self.assertEqual(result["selected"], "")
+        self.assertEqual(result["retry_reason"], "residual_prompt_artifact")
+
     def test_contact_prompt_echo_is_rejected_dynamically(self):
         model = FakeModel([
             ("Numer telefonu.", -0.40),
