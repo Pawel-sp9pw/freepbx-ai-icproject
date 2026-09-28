@@ -258,6 +258,28 @@ def looks_like_invalid_company_name(value: str):
     if any(fragment in normalized for fragment in bad_fragments):
         return True
 
+    # Short acknowledgements, farewells and filler-only transcripts cannot be
+    # valid company names. Keep this check company-specific so confirmation
+    # utterances such as "nie" remain valid in their own state.
+    company_only_noise = {
+        "tak", "nie", "dobrze", "dziękuję", "dziekuje", "do zobaczenia",
+        "do widzenia", "no", "to jest", "yyy", "yyy yyy", "hmm",
+    }
+    if normalized in company_only_noise:
+        return True
+
+    words = re.findall(r"[a-ząćęłńóśźż0-9]+", normalized, flags=re.IGNORECASE)
+    if words:
+        counts = Counter(words)
+        most_common = counts.most_common(1)[0][1]
+        # Typical Whisper loop: "nie, nie, nie..." or "no, no, no...".
+        if len(words) >= 4 and len(counts) <= 2 and most_common >= 4:
+            return True
+        # Filler-heavy fragments such as "no, no, no, to jest".
+        filler_words = {"no", "to", "jest", "yyy", "hmm"}
+        if len(words) >= 3 and all(word in filler_words for word in words):
+            return True
+
     if "www." in normalized or "http://" in normalized or "https://" in normalized:
         return True
 
