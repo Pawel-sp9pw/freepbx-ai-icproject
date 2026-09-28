@@ -669,6 +669,58 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.company_recognition_failures, 0)
         self.assertFalse(h.session.awaiting_company_phone_recovery)
 
+    async def test_correction_choice_prompt_is_empty_and_dtmf_after_two_failures(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company":"X","contact":"600100200","description":"Błędny opis"}
+        h.session.awaiting_correction = True
+        h.session.correction_field = ""
+        h.session.awaiting_company = False
+        self.assertEqual(h.session.stt_prompt_for_state(), "")
+
+        await h.user("Dzień dobry", score=-0.7)
+        await h.user("Brawo brawo", score=-0.7)
+        self.assertEqual(h.session.awaiting_confirmation_dtmf, "correction_choice")
+        await h.session.handle_dtmf(b"3")
+        self.assertEqual(h.session.correction_field, "description")
+
+    async def test_low_confidence_yes_cannot_confirm_untrusted_ticket(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company":"Dzwon","contact":"902051401","description":"Problem"}
+        h.session.ticket_field_meta = {
+            "company":{"source":"stt","score":-0.37,"trusted":True},
+            "contact":{"source":"stt","score":-0.59,"trusted":False},
+            "description":{"source":"stt","score":-0.2,"trusted":True},
+        }
+        h.session.confirmation_pending = True
+        h.session.awaiting_company = False
+        await h.user("tak", score=-0.80)
+        self.assertEqual(h.saved, [])
+        self.assertEqual(h.session.awaiting_confirmation_dtmf, "ticket")
+
+    async def test_invalid_problem_is_retried_then_saved_uncertain_placeholder(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company":"Kardiologia PULSMED","contact":"693693970"}
+        h.session.company_trusted = True
+        h.session.contact_trusted = True
+        h.session.awaiting_company = False
+        h.session.awaiting_problem = True
+        await h.user("Dzień dobry, dziękuję bardzo.", score=-0.94)
+        self.assertEqual(h.saved, [])
+        self.assertTrue(h.session.awaiting_problem)
+        await h.user("Nazywam się Paweł Balboa.", score=-0.74)
+        self.assertEqual(len(h.saved), 1)
+        self.assertTrue(h.saved[0]["uncertain"])
+        self.assertIn("nierozpoznany", h.saved[0]["ticket"]["description"].lower())
+
+    async def test_rejected_summary_blocks_hangup_autosave_state(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company":"X","contact":"600100200","description":"Błędny opis"}
+        h.session.confirmation_pending = True
+        h.session.awaiting_company = False
+        await h.user("nie", score=-0.1)
+        self.assertTrue(h.session.correction_rejected_pending)
+        self.assertTrue(h.session.awaiting_correction)
+
     async def test_second_failed_phone_attempt_switches_to_dtmf(self):
         h = ConversationHarness()
         h.session.ticket_data = {"company": "Alfatest"}
