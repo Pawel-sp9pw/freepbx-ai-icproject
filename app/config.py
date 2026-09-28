@@ -36,6 +36,7 @@ DEFAULTS = {
     "stt_prompt": "Rozmowa telefoniczna z polskim serwisem IT. Dzwoniący podaje nazwę firmy, numer telefonu lub opis problemu.",
     "stt_problem_hint": "Problem może dotyczyć e-recepty, P1, NFZ, faktur, paragonów, drukarki fiskalnej lub systemu MediQus.",
     "company_confirm_logprob": -0.55,
+    "contact_auto_accept_logprob": -0.30,
     "problem_auto_accept_logprob": -0.30,
     "phone_validation_mode": "pl",
     "customer_directory": "",
