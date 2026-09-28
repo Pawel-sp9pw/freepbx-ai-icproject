@@ -270,6 +270,18 @@ def looks_like_invalid_company_name(value: str):
         "dziękuję za oglądanie",
         "dziekuje za ogladanie",
         "subskryb",
+        "do zobaczenia",
+        "szanowni państwo",
+        "szanowni panstwo",
+        "nie zauważyłem",
+        "nie zauwazylem",
+        "nie wierzę",
+        "nie wierze",
+        "poproszę",
+        "poprosze",
+        "no dobra",
+        "mamy to",
+        "part ii",
     )
     if any(fragment in normalized for fragment in bad_fragments):
         return True
@@ -301,7 +313,8 @@ def looks_like_invalid_company_name(value: str):
             "bardzo", "dziekuje", "dziękuję", "dzieki", "dzięki",
             "dzwonie", "dzwonię", "dzwoniacy", "dzwoniący", "dzwoncy",
             "dzien", "dzień", "dobry", "czesc", "cześć", "szanowny",
-            "co", "to", "jest", "tak", "no", "a",
+            "co", "to", "jest", "tak", "no", "a", "poprosze", "poproszę",
+            "mamy", "part", "ii", "nie", "zauwazylem", "zauważyłem", "wierze", "wierzę",
         }
         if words and all(word in polite_or_speech_words for word in words):
             return True
@@ -336,7 +349,38 @@ def looks_like_ticket_cancellation(text: str):
         r"\b(?:zg[łl][ou]szen|z[łl][ou]szen)\w*\b.*\bnie\s+(?:jest\s+)?potrzebn",
         r"\bproblem\s+(?:ju[żz]\s+)?(?:rozwi[aą]zany|znikn[aą][łl]|ust[aą]pi[łl])\b.*\bnie\s+.*\bzg[łl][ou]szen",
     )
-    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
+    if any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns):
+        return True
+
+    # Tolerate common one-character STT corruptions seen in phone audio.
+    fuzzy_ticket = bool(re.search(r"\b(?:z|s|b)?[gk]?[*]?l?o?szen\w*\b|\bz[łl]o?szen\w*\b|\bzb[łl]oszen\w*\b", normalized))
+    cancel_action = bool(re.search(
+        r"\b(?:nie\s+)?(?:za[kg][łl]ad\w*|zag[łl]ad\w*|zak[łl]ad\w*|tworz\w*|tw[oó]rz\w*|rejestr\w*|zapis\w*)\b",
+        normalized,
+    ))
+    no_longer_needed = "niepotrzebn" in normalized or bool(re.search(r"\bnie\s+potrzebn", normalized))
+    already_works = bool(re.search(r"\bju[żz]\b.*\bdzia[łl]a", normalized)) or "zaczęło działać" in normalized or "zaczelo dzialac" in normalized
+
+    # Require two semantic signals to avoid cancelling a normal technical report.
+    if fuzzy_ticket and (cancel_action or no_longer_needed):
+        return True
+    if already_works and no_longer_needed:
+        return True
+    if already_works and cancel_action:
+        return True
+    return False
+
+
+def looks_like_possible_cancellation(text: str):
+    normalized = " ".join((text or "").lower().strip(" .,!?:;").split())
+    if not normalized:
+        return False
+    signals = (
+        "niepotrzebn", "nie potrzebn", "już działa", "juz dziala",
+        "zaczęło działać", "zaczelo dzialac", "nie zak", "nie zag",
+        "anul", "wycof", "rezygn",
+    )
+    return any(signal in normalized for signal in signals)
 
 
 def looks_like_abusive_dismissal(text: str):
@@ -706,6 +750,9 @@ class CallSession:
         self.awaiting_contact_dtmf = False
         self.dtmf_contact_buffer = ""
         self.dtmf_contact_context = ""
+        self.awaiting_confirmation_dtmf = ""
+        self.awaiting_company_phone_recovery = False
+        self.cancellation_suspected = False
         self.stt_misses = 0
         self.listen_not_before = 0.0
         self.last_tts_end = 0.0
@@ -1067,10 +1114,67 @@ class CallSession:
         return prompt
 
     async def handle_dtmf(self, payload: bytes):
-        if not self.awaiting_contact_dtmf:
-            return
         try:
             chars = payload.decode("ascii", errors="ignore")
+        except Exception:
+            chars = ""
+
+        if self.awaiting_confirmation_dtmf:
+            for ch in chars:
+                if ch not in ("1", "2"):
+                    continue
+                mode = self.awaiting_confirmation_dtmf
+                self.awaiting_confirmation_dtmf = ""
+                self.confirmation_misses = 0
+                if mode == "company":
+                    if ch == "1":
+                        self.ticket_data["company"] = self.company_candidate
+                        self.company_trusted = True
+                        self.mark_ticket_field("company", "confirmed_dtmf", self.company_candidate_score, True)
+                        self.company_confirmation_pending = False
+                        self.company_candidate = ""
+                        self.company_candidate_score = None
+                        self.company_confirmation_context = ""
+                        self.awaiting_company = False
+                        if self.ticket_data.get("contact"):
+                            self.awaiting_problem = True
+                            await self.say("Dziękuję. Proszę opisać problem.")
+                        else:
+                            self.awaiting_contact = True
+                            await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                    else:
+                        self.company_rejection_total += 1
+                        self.company_confirmation_pending = False
+                        self.company_candidate = ""
+                        self.company_candidate_score = None
+                        self.company_confirmation_context = ""
+                        self.awaiting_company = True
+                        if self.company_rejection_total >= 2:
+                            self.awaiting_company_phone_recovery = True
+                            await self.say("Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę.")
+                        else:
+                            await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
+                    return
+                if mode == "ticket":
+                    if ch == "1":
+                        self.confirmation_pending = False
+                        await self.finalize_ticket()
+                    else:
+                        self.confirmation_pending = False
+                        self.awaiting_correction = True
+                        self.correction_field = "description" if self.caller_matched_customer else ""
+                        if self.correction_field == "description":
+                            await self.say("Dobrze. Proszę podać poprawny opis problemu.")
+                        else:
+                            await self.say(
+                                "Dobrze. Proszę podać ponownie tylko dane, które mam poprawić: "
+                                "nazwę firmy, numer kontaktowy albo opis problemu."
+                            )
+                    return
+            return
+
+        if not self.awaiting_contact_dtmf:
+            return
         except Exception:
             chars = ""
         for ch in chars:
@@ -1101,6 +1205,22 @@ class CallSession:
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
                         self.mark_ticket_field("contact", "directory", None, True)
+                if context == "company_recovery":
+                    if matched_customer:
+                        self.awaiting_company_phone_recovery = False
+                        self.awaiting_company = False
+                        if self.ticket_data.get("description"):
+                            self.confirmation_pending = True
+                            await self.say_confirmation_summary()
+                        else:
+                            self.awaiting_problem = True
+                            await self.say("Dziękuję. Proszę opisać problem.")
+                    else:
+                        self.awaiting_company_phone_recovery = False
+                        self.awaiting_company = True
+                        self.company_rejection_total = 0
+                        await self.say("Nie znalazłem firmy po tym numerze. Proszę podać nazwę firmy.")
+                    return
                 if context == "correction":
                     self.awaiting_correction = False
                     self.correction_field = ""
@@ -1173,6 +1293,13 @@ class CallSession:
                         "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
                     )
                     return
+            if (self.company_confirmation_pending or self.confirmation_pending) and audio_seconds >= 0.50:
+                self.confirmation_misses += 1
+                if self.confirmation_misses >= 2:
+                    self.confirmation_misses = 0
+                    self.awaiting_confirmation_dtmf = "company" if self.company_confirmation_pending else "ticket"
+                    await self.say("Proszę nacisnąć 1, jeśli tak, albo 2, jeśli nie.")
+                    return
             # Silence is allowed only for a genuinely short residual prompt-leak
             # immediately after TTS. Never let a stale/misclassified retry_reason
             # suppress a real 1-2 second caller utterance.
@@ -1203,6 +1330,11 @@ class CallSession:
         self.history.append({"role": "user", "content": text})
 
         normalized = " ".join(text.lower().strip(" .,!?:;").split())
+
+        # Remember a likely cancellation even if STT mangled one keyword. This
+        # prevents the hangup fallback from creating an unwanted ticket.
+        if looks_like_possible_cancellation(text):
+            self.cancellation_suspected = True
 
         # An explicit "do not create / cancel the ticket" always wins over a
         # problem description. This must be checked before any state can save.
@@ -1241,6 +1373,9 @@ class CallSession:
             "do widzenia",
             "dziękuję do widzenia",
             "dziekuje do widzenia",
+            "do zobaczenia",
+            "dziękuję do zobaczenia",
+            "dziekuje do zobaczenia",
             "to wszystko",
             "koniec",
         )
@@ -1249,7 +1384,7 @@ class CallSession:
             # session cannot remain logically pending after a goodbye.
             self.company_confirmation_pending = False
             self.confirmation_pending = False
-            if self.has_complete_ticket_data() and not self.ticket_ref:
+            if self.has_complete_ticket_data() and not self.ticket_ref and not self.cancellation_suspected:
                 await self.finalize_ticket(
                     uncertain=True,
                     warning_text=(
@@ -1381,6 +1516,7 @@ class CallSession:
                 else:
                     self.awaiting_company = True
                     if should_recover_by_phone:
+                        self.awaiting_company_phone_recovery = True
                         await self.say(
                             "Ta nazwa została już dwa razy odrzucona. "
                             "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
@@ -1389,6 +1525,22 @@ class CallSession:
                         await self.say("Dobrze. Proszę podać samą nazwę firmy jeszcze raz.")
                 return
 
+            self.confirmation_misses += 1
+            if self.confirmation_misses >= 2:
+                self.confirmation_misses = 0
+                self.company_rejection_total += 1
+                if self.company_rejection_total >= 2:
+                    self.company_confirmation_pending = False
+                    self.company_candidate = ""
+                    self.company_candidate_score = None
+                    self.company_confirmation_context = ""
+                    self.awaiting_company = True
+                    self.awaiting_company_phone_recovery = True
+                    await self.say("Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę.")
+                    return
+                self.awaiting_confirmation_dtmf = "company"
+                await self.say("Proszę nacisnąć 1, jeśli tak, albo 2, jeśli nie.")
+                return
             await self.say(
                 "Nie rozpoznałem jednoznacznej odpowiedzi. "
                 "Proszę powiedzieć tylko tak albo nie."
@@ -1449,12 +1601,15 @@ class CallSession:
             # Ambiguous confirmation must never be guessed by the LLM. A
             # misheard "tak" must not turn into a correction request.
             self.confirmation_misses += 1
-            if self.confirmation_misses >= 1:
+            if self.confirmation_misses >= 2:
                 self.confirmation_misses = 0
-                await self.say(
-                    "Nie rozpoznałem jednoznacznej odpowiedzi. "
-                    "Proszę powiedzieć tylko tak albo nie."
-                )
+                self.awaiting_confirmation_dtmf = "ticket"
+                await self.say("Proszę nacisnąć 1, jeśli tak, albo 2, jeśli nie.")
+                return
+            await self.say(
+                "Nie rozpoznałem jednoznacznej odpowiedzi. "
+                "Proszę powiedzieć tylko tak albo nie."
+            )
             return
 
         # Two-step correction flow:
@@ -1607,6 +1762,37 @@ class CallSession:
             phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             company_text = clean_company_display_name(text) or text.strip()
 
+            if self.awaiting_company_phone_recovery:
+                numericish = bool(re.search(r"\d", text)) or phone
+                if phone:
+                    phone_customer, phone_score = match_customer("", phone, self.customer_directory)
+                    if phone_customer:
+                        self.ticket_data["company"] = phone_customer["name"]
+                        self.ticket_data["contact"] = phone_customer.get("phone") or phone
+                        self.company_trusted = True
+                        self.contact_trusted = True
+                        self.mark_ticket_field("company", "directory", phone_score, True)
+                        self.mark_ticket_field("contact", "directory", None, True)
+                        self.awaiting_company_phone_recovery = False
+                        self.awaiting_company = False
+                        self.contact_attempts = 0
+                        self.awaiting_problem = True
+                        await self.say("Dziękuję. Proszę opisać problem.")
+                        return
+                if numericish:
+                    self.contact_attempts += 1
+                    if self.contact_attempts >= 2:
+                        self.awaiting_contact_dtmf = True
+                        self.dtmf_contact_buffer = ""
+                        self.dtmf_contact_context = "company_recovery"
+                        await self.say(
+                            "Nie udało mi się odnaleźć firmy po numerze. "
+                            "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
+                        )
+                    else:
+                        await self.say("Nie znalazłem firmy po tym numerze. Proszę podać numer jeszcze raz.")
+                    return
+
             if phone:
                 phone_customer, phone_score = match_customer("", phone, self.customer_directory)
                 if phone_customer:
@@ -1623,6 +1809,37 @@ class CallSession:
                     return
 
             if looks_like_invalid_company_name(company_text):
+                try:
+                    retry_result = await asyncio.to_thread(
+                        transcribe_pcm16,
+                        pcm,
+                        self.settings["whisper_model"],
+                        self.settings["whisper_device"],
+                        self.settings["whisper_compute_type"],
+                        8000,
+                        "",
+                        "confirmation",
+                        True,
+                        int(self.settings.get("stt_workers", 2) or 2),
+                        self.call_id,
+                    )
+                    retry_text = str((retry_result or {}).get("selected", "") if isinstance(retry_result, dict) else (retry_result or ""))
+                except Exception:
+                    retry_text = ""
+                retry_norm = " ".join(retry_text.lower().strip(" .,!?:;").split())
+                if looks_like_ticket_cancellation(retry_text):
+                    self.cancellation_suspected = True
+                    self.final_status = "caller_cancelled"
+                    await self.say("Rozumiem. Nie będę zakładać zgłoszenia. Do widzenia.")
+                    self.closed = True
+                    self.writer.close()
+                    return
+                if any(x in retry_norm for x in ("do widzenia", "do zobaczenia")):
+                    self.final_status = "caller_ended"
+                    await self.say("Dziękuję za rozmowę. Do widzenia.")
+                    self.closed = True
+                    self.writer.close()
+                    return
                 await self.say(
                     "Nie udało mi się wiarygodnie rozpoznać nazwy firmy. "
                     "Proszę podać samą nazwę firmy jeszcze raz."
@@ -1675,6 +1892,7 @@ class CallSession:
                 rejected_count = self.rejected_company_counts.get(normalized_candidate, 0)
                 if self.company_rejection_total >= 2 or (was_rejected and rejected_count >= 2):
                     self.awaiting_company = True
+                    self.awaiting_company_phone_recovery = True
                     await self.say(
                         "Ta nazwa była już odrzucona. "
                         "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
@@ -2084,7 +2302,8 @@ async def handle_client(reader, writer):
         if (
             not session.ticket_ref
             and session.has_complete_ticket_data()
-            and session.final_status not in ("completed", "completed_uncertain", "icp_error")
+            and session.final_status not in ("completed", "completed_uncertain", "icp_error", "caller_cancelled")
+            and not session.cancellation_suspected
         ):
             await session.finalize_ticket(
                 uncertain=True,
