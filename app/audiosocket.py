@@ -513,12 +513,19 @@ def extract_company_fragment(text: str, directory: list | None = None):
     if not source:
         return ""
 
-    problem = extract_problem_fragment(source)
-    prefix = source
-    if problem:
-        pos = source.lower().find(problem.lower())
-        if pos >= 0:
-            prefix = source[:pos]
+    # Split directly at the first concrete problem signal. Using the full
+    # extracted problem sentence would lose the company when both appear in
+    # the same sentence ("Tu Rehabilitacja ETOS nie działa nam poczta").
+    lower = source.lower()
+    problem_signals = (
+        "nie działa", "nie dziala", "nie mogę", "nie moge", "nie można", "nie mozna",
+        "błąd", "blad", "awaria", "usterka", "problem z", "brak ", "wyskakuje",
+        "zawiesza", "rozłącza", "rozlacza", "wolno działa", "wolno dziala",
+        "nie otwiera", "nie drukuje", "nie loguje", "nie zapisuje", "nie wysyła",
+        "nie wysyla", "przestał", "przestal", "zepsuł", "zepsul",
+    )
+    positions = [lower.find(signal) for signal in problem_signals if lower.find(signal) >= 0]
+    prefix = source[:min(positions)] if positions else source
 
     prefix = re.sub(
         r"^\s*(?:dzień dobry|dzien dobry|dobry wieczór|dobry wieczor|cześć|czesc|witam)[,.:;\-\s]*",
