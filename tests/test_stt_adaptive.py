@@ -154,6 +154,18 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertEqual(model.calls[0]["beam_size"], 5)
         self.assertFalse(model.calls[0]["vad_filter"])
 
+    def test_short_fields_bound_whisper_output_tokens(self):
+        company_model = FakeModel([("Alfatest", -0.2)])
+        with patch.object(stt, "get_model", return_value=company_model):
+            stt.transcribe_pcm16(b"\x00" * 16000, model_name="medium", device="cpu", compute_type="int8", sample_rate=8000, mode="company")
+        self.assertEqual(company_model.calls[0]["max_new_tokens"], 24)
+        self.assertTrue(company_model.calls[0]["without_timestamps"])
+
+        contact_model = FakeModel([("792032104", -0.2)])
+        with patch.object(stt, "get_model", return_value=contact_model):
+            stt.transcribe_pcm16(b"\x00" * 16000, model_name="medium", device="cpu", compute_type="int8", sample_rate=8000, mode="contact")
+        self.assertEqual(contact_model.calls[0]["max_new_tokens"], 48)
+
     def test_rejected_company_pass_drops_prompt_on_retry(self):
         model = FakeModel([
             ("Dzwoniący podaje nazwę swojej firmy po polsku.", -0.10),
