@@ -359,9 +359,9 @@ def looks_like_ticket_cancellation(text: str):
     }))
     fuzzy_ticket = bool(re.search(r"\b(?:z|s|b)?(?:g|k|b)?loszen\w*\b|\bzlozen\w*\b|\bzbloszen\w*\b", folded))
     cancel_action = bool(re.search(
-        r"\b(?:nie\s+)?(?:za[kg]lad\w*|zaglad\w*|zaklad\w*|tworz\w*|rejestr\w*|zapis\w*)\b",
+        r"\b(?:nie\s+)(?:za[kg]lad\w*|zaglad\w*|zaklad\w*|tworz\w*|rejestr\w*|zapis\w*)\b",
         folded,
-    ))
+    )) or bool(re.search(r"\b(?:anul\w*|wycof\w*|rezygn\w*)\b", folded))
     no_longer_needed = "niepotrzebn" in folded or bool(re.search(r"\bnie\s+potrzebn", folded))
     already_works = bool(re.search(r"\bjuz\b.*\bdziala", folded)) or "zaczelo dzialac" in folded
 
