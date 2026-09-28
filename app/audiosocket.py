@@ -275,15 +275,15 @@ def looks_like_ticket_cancellation(text: str):
         return False
 
     patterns = (
-        r"\bnie\s+(?:prosz[ęe]\s+)?(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|tw[oó]rzcie|rejestruj|zapisuj)\b.*\bzg[łl]oszen",
-        r"\bprosz[ęe]\s+(?:o\s+)?nie\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl]oszen",
-        r"\b(anuluj|anulowa[ćc]|wycofuj[ęe]|wycofaj|rezygnuj[ęe]|prozygnuj[ęe])\b.*\bzg[łl]oszen",
-        r"\bzg[łl]oszeni[ea]\b.*\b(?:ju[żz]\s+)?nie\s+(?:jest\s+)?potrzebn",
-        r"\bzg[łl]oszenie\b.*\b(niepotrzebne|nieaktualne|anuluj|wycofaj)\b",
-        r"\bju[żz]\s+(?:zacz[ęe][łl]o\s+)?dzia[łl]a[ćc]?\b.*\b(?:nie|unie)\s+.*\bzg[łl]oszen",
-        r"\bprosz[ęe]\b.*\b(?:nie|unie)\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl]oszen",
-        r"\b(?:anul|omu[łl])\w*\b.*\bzg[łl]oszen",
-        r"\bproblem\s+(?:ju[żz]\s+)?(?:rozwi[aą]zany|znikn[aą][łl]|ust[aą]pi[łl])\b.*\bnie\s+.*\bzg[łl]oszen",
+        r"\bnie\s+(?:prosz[ęe]\s+)?(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|tw[oó]rzcie|rejestruj|zapisuj)\b.*\bzg[łl][ou]szen",
+        r"\bprosz[ęe]\s+(?:o\s+)?nie\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl][ou]szen",
+        r"\b(anuluj|anulowa[ćc]|wycofuj[ęe]|wycofaj|rezygnuj[ęe]|prozygnuj[ęe])\b.*\bzg[łl][ou]szen",
+        r"\bzg[łl][ou]szeni[ea]\b.*\b(?:ju[żz]\s+)?nie\s+(?:jest\s+)?potrzebn",
+        r"\bzg[łl][ou]szenie\b.*\b(niepotrzebne|nieaktualne|anuluj|wycofaj)\b",
+        r"\bju[żz]\s+(?:zacz[ęe][łl]o\s+)?dzia[łl]a[ćc]?\b.*\b(?:nie|unie)\s+.*\bzg[łl][ou]szen",
+        r"\bprosz[ęe]\b.*\b(?:nie|unie)\s+(?:zak[łl]ada[ćc]|zak[łl]adaj|tw[oó]rz|rejestruj|zapisuj)\b.*\bzg[łl][ou]szen",
+        r"\b(?:anul|omu[łl])\w*\b.*\bzg[łl][ou]szen",
+        r"\bproblem\s+(?:ju[żz]\s+)?(?:rozwi[aą]zany|znikn[aą][łl]|ust[aą]pi[łl])\b.*\bnie\s+.*\bzg[łl][ou]szen",
     )
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
 
@@ -387,11 +387,11 @@ def looks_like_ticket_meta_request(text: str):
         return False
 
     meta_patterns = (
-        r"\b(utw[oó]rz|stw[oó]rz|zapisz|dodaj|za[łl][oó][żz]|przyjmij|zarejestruj)\b.*\bzg[łl]oszen",
-        r"\b(przeka[żz]|wy[śs]lij|prze[śs]lij)\b.*\b(serwis|zg[łl]oszen)",
+        r"\b(utw[oó]rz|stw[oó]rz|zapisz|dodaj|za[łl][oó][żz]|przyjmij|zarejestruj)\b.*\bzg[łl][ou]szen",
+        r"\b(przeka[żz]|wy[śs]lij|prze[śs]lij)\b.*\b(serwis|zg[łl][ou]szen)",
         r"\bzg[łl]o[śs]\b.*\b(serwis|to|spraw[ęe])",
-        r"\b(testowe|testowy|test)\b.*\bzg[łl]oszen",
-        r"\bzg[łl]oszenie\b.*\b(serwis|utw[oó]rz|zapisz|przeka[żz])",
+        r"\b(testowe|testowy|test)\b.*\bzg[łl][ou]szen",
+        r"\bzg[łl][ou]szenie\b.*\b(serwis|utw[oó]rz|zapisz|przeka[żz])",
     )
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in meta_patterns)
 
