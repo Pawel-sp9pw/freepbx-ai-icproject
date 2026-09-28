@@ -1163,11 +1163,11 @@ class CallSession:
         if self.awaiting_correction and self.correction_field == "company":
             return customer_names
 
-        if self.awaiting_company:
-            return customer_names
-
         if self.awaiting_company_phone_recovery:
             return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
+
+        if self.awaiting_company:
+            return customer_names
 
         if self.awaiting_correction and self.correction_field == "contact":
             return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
