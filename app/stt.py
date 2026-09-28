@@ -23,6 +23,8 @@ PROMPT_LEAK_PHRASES = (
     "dzwoniacy podaje nazwe swojej firmy",
     "dzwoniący opisuje problem techniczny lub usterkę po polsku",
     "dzwoniacy opisuje problem techniczny lub usterke po polsku",
+    "dzwoniący opisuje problem",
+    "dzwoniacy opisuje problem",
 )
 
 KNOWN_WHISPER_HALLUCINATIONS = (
@@ -71,6 +73,13 @@ def get_model(name: str, device: str, compute_type: str, num_workers: int = 1):
             cpu_threads if device == "cpu" else "n/a",
         )
     return _models[key]
+
+
+def _looks_like_repeated_confirmation(text: str):
+    words = re.findall(r"[a-ząćęłńóśźż]+", (text or "").lower())
+    if not words:
+        return False
+    return set(words) in ({"tak"}, {"nie"})
 
 
 def _looks_like_numeric_contact_text(text: str):
@@ -426,7 +435,9 @@ def transcribe_pcm16(
             patience=1.10,
             max_new_tokens=24 if mode == "company" else (48 if mode == "contact" else None),
         )
-        if mode == "contact" and _looks_like_numeric_contact_text(first_text):
+        if mode == "confirmation" and _looks_like_repeated_confirmation(first_text):
+            first_bad, first_reason = False, ""
+        elif mode == "contact" and _looks_like_numeric_contact_text(first_text):
             first_bad, first_reason = False, ""
         elif _looks_like_prompt_echo(first_text, initial_prompt):
             first_bad, first_reason = True, "prompt_leak"
@@ -523,6 +534,15 @@ def transcribe_pcm16(
                 "rejected": bool(second_bad),
                 "reason": second_reason or "",
             }
+            if (
+                mode == "company"
+                and audio_seconds <= 1.10
+                and first_reason in ("prompt_leak", "known_whisper_hallucination")
+                and second_bad
+                and second_reason in ("prompt_leak", "known_whisper_hallucination", "empty")
+            ):
+                meta["retry_reason"] = "residual_prompt_artifact"
+
             if second_bad:
                 if second_text:
                     log.warning(
