@@ -596,6 +596,7 @@ class CallSession:
         self.turns = 0
         self.closed = False
         self.ticket_data = {}
+        self.ticket_field_meta = {}
         self.customer_directory = parse_customer_directory(self.settings.get("customer_directory", ""))
         self.confirmation_pending = False
         self.awaiting_correction = False
@@ -628,6 +629,17 @@ class CallSession:
         self.final_status = "ended"
         self.ticket_ref = ""
         self.final_error = ""
+
+    def mark_ticket_field(self, field, source, score=None, trusted=None):
+        meta = {"source": str(source or "unknown")}
+        if score is not None:
+            try:
+                meta["score"] = round(float(score), 4)
+            except (TypeError, ValueError):
+                pass
+        if trusted is not None:
+            meta["trusted"] = bool(trusted)
+        self.ticket_field_meta[str(field)] = meta
 
     def record_customer_match(self, source, company, contact, matched_customer, score):
         """Persist safe matching telemetry for post-call regression analysis."""
@@ -737,6 +749,24 @@ class CallSession:
                 token,
                 self.settings.get("icp_board_column", ""),
             )
+            try:
+                add_message(
+                    self.call_id,
+                    "ticket",
+                    json.dumps(
+                        {
+                            "company": str(ticket.get("company", "") or ""),
+                            "contact": str(ticket.get("contact", "") or ""),
+                            "description": str(ticket.get("description", "") or ""),
+                            "uncertain": bool(uncertain),
+                            "field_meta": dict(self.ticket_field_meta),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                log.warning("[%s] Could not persist ticket snapshot", self.call_id, exc_info=True)
+
             created = await client.create_task(ticket, self.settings.get("icp_priority", "normal"))
             ticket_no = created.get("number") or created.get("shortCode") or ""
             self.ticket_ref = str(ticket_no or created.get("id") or "")
@@ -954,11 +984,13 @@ class CallSession:
                 self.contact_attempts = 0
                 self.ticket_data["contact"] = phone
                 self.contact_trusted = True
+                self.mark_ticket_field("contact", "dtmf", None, True)
                 matched_customer, match_score = match_customer(str(self.ticket_data.get("company", "") or ""), phone, self.customer_directory)
                 self.record_customer_match("dtmf_contact", str(self.ticket_data.get("company", "") or ""), phone, matched_customer, match_score)
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
+                    self.mark_ticket_field("company", "directory", match_score, True)
                     if matched_customer.get("phone"):
                         self.ticket_data["contact"] = matched_customer["phone"]
                 if context == "correction":
@@ -1116,6 +1148,7 @@ class CallSession:
             if matches_confirmation_phrase(normalized, yes_phrases):
                 self.ticket_data["company"] = self.company_candidate
                 self.company_trusted = True
+                self.mark_ticket_field("company", "confirmed_stt", self.company_candidate_score, True)
                 if self.company_candidate_phone and not self.ticket_data.get("contact"):
                     self.ticket_data["contact"] = self.company_candidate_phone
                 context = self.company_confirmation_context
@@ -1346,6 +1379,7 @@ class CallSession:
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
+                    self.mark_ticket_field("company", "directory", match_score, True)
                 else:
                     confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                     low_confidence = (
@@ -1364,6 +1398,7 @@ class CallSession:
                         )
                         return
                     self.ticket_data["company"] = company_text
+                self.mark_ticket_field("company", "stt", selected_score, self.company_trusted)
 
             elif self.correction_field == "contact":
                 phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
@@ -1381,6 +1416,7 @@ class CallSession:
                 self.awaiting_contact_dtmf = False
                 self.ticket_data["contact"] = phone
                 self.contact_trusted = self.contact_confidence_is_high(selected_score)
+                self.mark_ticket_field("contact", "stt", selected_score, self.contact_trusted)
                 matched_customer, match_score = match_customer(
                     str(self.ticket_data.get("company", "") or ""),
                     phone,
@@ -1396,6 +1432,7 @@ class CallSession:
                 if matched_customer:
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
+                    self.mark_ticket_field("company", "directory", match_score, True)
                     if matched_customer.get("phone"):
                         self.ticket_data["contact"] = matched_customer["phone"]
                         self.contact_trusted = True
@@ -1414,6 +1451,7 @@ class CallSession:
                     )
                     return
                 self.ticket_data["description"] = text.strip()
+                self.mark_ticket_field("description", "stt", selected_score, self.problem_confidence_is_high(selected_score))
                 self.ticket_data["title"] = text.strip()[:80] or "Zgłoszenie telefoniczne"
 
                 if self.can_auto_finalize(selected_score):
@@ -1485,6 +1523,7 @@ class CallSession:
             if matched_customer:
                 self.ticket_data["company"] = matched_customer["name"]
                 self.company_trusted = True
+                self.mark_ticket_field("company", "directory", match_score, True)
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
                     self.contact_trusted = True
@@ -1505,6 +1544,7 @@ class CallSession:
                     await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
                     return
                 self.ticket_data["company"] = company_text
+                self.mark_ticket_field("company", "stt", selected_score, self.company_trusted)
                 self.company_trusted = bool(
                     selected_score is not None
                     and float(selected_score) >= confirm_threshold
@@ -1513,6 +1553,7 @@ class CallSession:
             if phone and not self.ticket_data.get("contact"):
                 self.ticket_data["contact"] = phone
                 self.contact_trusted = self.contact_confidence_is_high(selected_score)
+                self.mark_ticket_field("contact", "stt", selected_score, self.contact_trusted)
 
             self.awaiting_company = False
 
@@ -1568,6 +1609,7 @@ class CallSession:
             self.awaiting_contact_dtmf = False
             self.ticket_data["contact"] = phone
             self.contact_trusted = self.contact_confidence_is_high(selected_score)
+            self.mark_ticket_field("contact", "stt", selected_score, self.contact_trusted)
 
             matched_customer, match_score = match_customer(
                 str(self.ticket_data.get("company", "") or ""),
@@ -1584,6 +1626,7 @@ class CallSession:
             if matched_customer:
                 self.ticket_data["company"] = matched_customer["name"]
                 self.company_trusted = True
+                self.mark_ticket_field("company", "directory", match_score, True)
                 if matched_customer.get("phone"):
                     self.ticket_data["contact"] = matched_customer["phone"]
                     self.contact_trusted = True
@@ -1627,6 +1670,7 @@ class CallSession:
 
             self.ticket_data["description"] = text.strip()
             self.early_problem_score = selected_score
+            self.mark_ticket_field("description", "stt", selected_score, self.problem_confidence_is_high(selected_score))
             self.awaiting_problem = False
 
             # Fast path for recognized callers: company and contact already came
@@ -1824,6 +1868,7 @@ async def handle_client(reader, writer):
             if caller_digits:
                 session.original_caller = caller_digits
                 session.ticket_data["contact"] = caller_digits
+                session.mark_ticket_field("contact", "callerid", None, True)
                 matched_customer, match_score = match_customer(
                     "",
                     caller_digits,
@@ -1834,8 +1879,10 @@ async def handle_client(reader, writer):
                     session.company_trusted = True
                     session.contact_trusted = True
                     session.ticket_data["company"] = matched_customer["name"]
+                    session.mark_ticket_field("company", "callerid_directory", match_score, True)
                     if matched_customer.get("phone"):
                         session.ticket_data["contact"] = matched_customer["phone"]
+                        session.mark_ticket_field("contact", "callerid_directory", None, True)
                 else:
                     # Preserve the actual inbound CallerID separately from any
                     # contact number later recognized or corrected by STT.
