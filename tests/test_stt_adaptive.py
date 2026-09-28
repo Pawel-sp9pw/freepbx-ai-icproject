@@ -157,6 +157,29 @@ class AdaptiveSTTTests(unittest.TestCase):
         self.assertEqual(result["pass1"]["reason"], "prompt_leak")
         self.assertEqual(result["retry_reason"], "short_rejected_audio")
 
+    def test_contact_prompt_echo_is_rejected_dynamically(self):
+        model = FakeModel([
+            ("Numer telefonu.", -0.40),
+            ("Siedem dziewięć dwa zero trzy dwa jeden zero cztery.", -0.20),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * 32000,
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="Numer telefonu. Cyfry od zera do dziewięciu.",
+                mode="contact",
+                return_metadata=True,
+            )
+        self.assertTrue(result["pass1"]["rejected"])
+        self.assertEqual(result["pass1"]["reason"], "prompt_leak")
+        self.assertEqual(
+            result["selected"],
+            "Siedem dziewięć dwa zero trzy dwa jeden zero cztery.",
+        )
+
     def test_numeric_contact_with_dots_is_not_treated_as_domain(self):
         model = FakeModel([
             ("451.05.59.99", -0.218),
