@@ -41,7 +41,7 @@ DEFAULTS = {
     "phone_validation_mode": "pl",
     "customer_directory": "",
     "company_alias_dictionary": "",
-    "problem_dictionary": "e-recepta\nP1\nNFZ\nfaktura\nparagon\ndrukarka fiskalna\nMediQus\nskaner kodów",
+    "problem_dictionary": "e-recepta\ne-recepty\nP1\nNFZ\nfaktura\nparagon\ndrukarka fiskalna\nMediQus\nskaner kodów",
     "callerid_api_key": "",
     "piper_url": "http://127.0.0.1:5000",
     "piper_voice": "pl_PL-mc_speech-medium",
