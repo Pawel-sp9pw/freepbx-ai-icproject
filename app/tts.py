@@ -7,6 +7,8 @@ import numpy as np
 from scipy.signal import resample_poly
 
 
+PIPER_TIMEOUT_SECONDS = 15.0
+
 # Most prompts are repeated verbatim across calls. Caching the final 8 kHz PCM
 # avoids another Piper HTTP request, WAV decode and resample for every caller.
 # The cache is deliberately small and process-local; dynamic summaries naturally
@@ -83,7 +85,7 @@ async def synthesize_pcm8k(piper_url: str, text: str, voice: str | None = None):
     if voice:
         payload["voice"] = voice
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=PIPER_TIMEOUT_SECONDS) as client:
         r = await client.post(f"{piper_url.rstrip('/')}/synthesize", json=payload)
         r.raise_for_status()
         wav_bytes = r.content
