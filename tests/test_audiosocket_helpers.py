@@ -276,6 +276,11 @@ class _FakeTTSClient:
         return _FakeTTSResponse(buf.getvalue())
 
 
+class TTSTimeoutRegressionTests(unittest.TestCase):
+    def test_local_piper_timeout_is_fail_fast(self):
+        self.assertLessEqual(tts.PIPER_TIMEOUT_SECONDS, 20.0)
+
+
 class TTSCacheRegressionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         tts.clear_tts_cache()
