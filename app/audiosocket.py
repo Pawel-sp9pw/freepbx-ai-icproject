@@ -81,6 +81,68 @@ def parse_customer_directory(raw: str):
     return items
 
 
+def parse_company_alias_dictionary(raw: str):
+    """Parse: canonical | alias 1 | alias 2 ...; phone number is optional."""
+    items = []
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split("|") if part.strip()]
+        if not parts:
+            continue
+        canonical = parts[0]
+        aliases = []
+        for part in parts[1:]:
+            aliases.extend(x.strip() for x in part.split(",") if x.strip())
+        seen = set()
+        normalized_aliases = []
+        for value in [canonical, *aliases]:
+            key = normalize_company(value)
+            if key and key not in seen:
+                seen.add(key)
+                normalized_aliases.append(value)
+        items.append({"name": canonical, "aliases": normalized_aliases})
+    return items
+
+
+def merge_company_alias_dictionary(customers, alias_items):
+    merged = [dict(item) for item in (customers or [])]
+    by_name = {normalize_company(item.get("name", "")): item for item in merged}
+    for alias_item in alias_items or []:
+        canonical = str(alias_item.get("name", "") or "").strip()
+        key = normalize_company(canonical)
+        if not key:
+            continue
+        target = by_name.get(key)
+        if target is None:
+            target = {"name": canonical, "phone": "", "aliases": []}
+            merged.append(target)
+            by_name[key] = target
+        existing = list(target.get("aliases") or [])
+        existing_keys = {normalize_company(x) for x in existing}
+        for alias in alias_item.get("aliases") or []:
+            alias_key = normalize_company(alias)
+            if alias_key and alias_key not in existing_keys:
+                existing.append(alias)
+                existing_keys.add(alias_key)
+        target["aliases"] = existing
+    return merged
+
+
+def parse_problem_dictionary(raw: str):
+    values = []
+    seen = set()
+    for line in (raw or "").splitlines():
+        for part in line.split(","):
+            value = part.strip()
+            key = value.lower()
+            if value and not value.startswith("#") and key not in seen:
+                seen.add(key)
+                values.append(value)
+    return values
+
+
 def normalize_company(value: str):
     text = (value or "").lower()
     # Normalize Polish diacritics and common conversational prefixes so that
@@ -707,27 +769,33 @@ def match_customer(company: str, contact: str, directory: list):
 
     candidates = []
     for item in directory:
-        target = normalize_company(item.get("name", ""))
-        if not target:
-            continue
+        variants = [item.get("name", ""), *(item.get("aliases") or [])]
+        best_variant_score = 0.0
+        for variant in variants:
+            target = normalize_company(variant)
+            if not target:
+                continue
 
-        score = SequenceMatcher(None, source, target).ratio()
-        compact_source = source.replace(" ", "")
-        compact_target = target.replace(" ", "")
-        if compact_source and compact_target:
-            score = max(
-                score,
-                SequenceMatcher(None, compact_source, compact_target).ratio(),
-            )
+            score = SequenceMatcher(None, source, target).ratio()
+            compact_source = source.replace(" ", "")
+            compact_target = target.replace(" ", "")
+            if compact_source and compact_target:
+                score = max(
+                    score,
+                    SequenceMatcher(None, compact_source, compact_target).ratio(),
+                )
 
-        # Exact token containment is a strong signal for inputs such as
-        # "Firma Paweł" vs "Paweł", after conversational prefixes are removed.
-        if source == target:
-            score = 1.0
-        elif source in target or target in source:
-            score = max(score, 0.90)
+            # Exact token containment is a strong signal for inputs such as
+            # "Firma Paweł" vs "Paweł", after conversational prefixes are removed.
+            if source == target:
+                score = 1.0
+            elif source in target or target in source:
+                score = max(score, 0.90)
 
-        candidates.append((score, item))
+            best_variant_score = max(best_variant_score, score)
+
+        if best_variant_score > 0:
+            candidates.append((best_variant_score, item))
 
     if not candidates:
         return None, 0.0
@@ -765,7 +833,10 @@ class CallSession:
         self.closed = False
         self.ticket_data = {}
         self.ticket_field_meta = {}
-        self.customer_directory = parse_customer_directory(self.settings.get("customer_directory", ""))
+        base_customers = parse_customer_directory(self.settings.get("customer_directory", ""))
+        alias_items = parse_company_alias_dictionary(self.settings.get("company_alias_dictionary", ""))
+        self.customer_directory = merge_company_alias_dictionary(base_customers, alias_items)
+        self.problem_dictionary = parse_problem_dictionary(self.settings.get("problem_dictionary", ""))
         self.confirmation_pending = False
         self.awaiting_correction = False
         self.correction_field = ""
@@ -1165,21 +1236,25 @@ class CallSession:
             return ""
 
         if self.awaiting_company_phone_recovery:
-            return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
+            return "0 1 2 3 4 5 6 7 8 9"
 
         if self.awaiting_company:
             return ""
 
         if self.awaiting_correction and self.correction_field == "contact":
-            return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
+            return "0 1 2 3 4 5 6 7 8 9"
 
         if self.awaiting_contact:
-            return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
+            return "0 1 2 3 4 5 6 7 8 9"
 
         if self.awaiting_correction and self.correction_field == "description":
+            if self.problem_dictionary:
+                return " ".join(self.problem_dictionary)
             return (self.settings.get("stt_problem_hint", "") or "").strip()
 
         if self.awaiting_problem:
+            if self.problem_dictionary:
+                return " ".join(self.problem_dictionary)
             return (self.settings.get("stt_problem_hint", "") or "").strip()
 
         return ""
@@ -1344,6 +1419,17 @@ class CallSession:
             if isinstance(stt_result, dict):
                 text = str(stt_result.get("selected", "") or "")
                 selected_score = stt_result.get("selected_score")
+                if stt_result.get("mode") == "contact" and text:
+                    raw_contact_text = text
+                    normalized_contact = extract_phone_digits(
+                        text,
+                        self.settings.get("phone_validation_mode", "pl"),
+                    )
+                    if normalized_contact:
+                        text = normalized_contact
+                        stt_result["selected_raw"] = raw_contact_text
+                        stt_result["selected"] = normalized_contact
+                        stt_result["normalized_contact"] = True
                 add_message(
                     self.call_id,
                     "stt_debug",
