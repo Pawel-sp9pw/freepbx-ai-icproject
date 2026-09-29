@@ -44,6 +44,50 @@ class AdaptiveSTTTests(unittest.TestCase):
             "Kardiologia PULSMED Przychodnia Vena",
         )
 
+    def test_company_training_credit_hallucination_is_rejected(self):
+        for sample in (
+            "Produkcja Polskie Towarzystwo Astronomiczne Telewizja Polska",
+            "Produkcja Polskie Towarzystwo Polskie Telewizja Polska",
+        ):
+            bad, reason = stt._looks_hallucinated(sample, 1.0)
+            self.assertTrue(bad, sample)
+            self.assertEqual(reason, "known_whisper_hallucination")
+
+    def test_extremely_weak_company_is_not_decoded_twice(self):
+        model = FakeModel([("Daję nam drogę", -1.41)])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * int(16000 * 2.6),
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="",
+                mode="company",
+                return_metadata=True,
+                hotwords="",
+            )
+        self.assertEqual(result["selected"], "")
+        self.assertEqual(len(model.calls), 1)
+        self.assertFalse(result["retry"])
+
+    def test_borderline_company_candidate_survives_for_directory_matching(self):
+        model = FakeModel([("Paweł", -0.97)])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * int(16000 * 1.7),
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="",
+                mode="company",
+                return_metadata=True,
+                hotwords="",
+            )
+        self.assertEqual(result["selected"], "Paweł")
+        self.assertEqual(len(model.calls), 1)
+
     def test_known_subtitle_hallucinations_are_rejected(self):
         samples = [
             "www.youtube.com www.youtube.com",
