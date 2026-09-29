@@ -61,7 +61,7 @@ class AdaptiveSTTTests(unittest.TestCase):
                 hotwords="",
             )
         self.assertEqual(result["selected"], "")
-        self.assertEqual(result["retry_reason"], "short_rejected_audio")
+        self.assertEqual(result["retry_reason"], "residual_prompt_artifact")
         self.assertEqual(len(model.calls), 1)
 
     def test_company_training_credit_hallucination_is_rejected(self):
