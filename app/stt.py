@@ -504,7 +504,11 @@ def transcribe_pcm16(
         )
         if short_known_hallucination or short_prompt_artifact:
             meta["retry"] = False
-            meta["retry_reason"] = "short_rejected_audio"
+            meta["retry_reason"] = (
+                "residual_prompt_artifact"
+                if short_known_hallucination and audio_seconds > 0.80
+                else "short_rejected_audio"
+            )
             meta["selected"] = ""
             meta["selected_score"] = None
             return meta if return_metadata else ""
