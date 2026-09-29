@@ -122,7 +122,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("e-recepty", hotwords)
         self.assertNotIn("dzwoniący", hotwords.lower())
 
-    async def test_company_state_uses_directory_names_as_hotwords_only(self):
+    async def test_company_state_does_not_bias_whisper_with_full_directory(self):
         h = ConversationHarness()
         h.session.customer_directory = [
             {"name": "Kardiologia PULSMED", "phone": "693693970"},
@@ -131,10 +131,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         await h.start()
 
         self.assertEqual(h.session.stt_prompt_for_state(), "")
-        hotwords = h.session.stt_hotwords_for_state()
-        self.assertIn("Kardiologia PULSMED", hotwords)
-        self.assertIn("Przychodnia Vena", hotwords)
-        self.assertNotIn("Dzwoniący podaje", hotwords)
+        self.assertEqual(h.session.stt_hotwords_for_state(), "")
 
     async def test_ticket_field_provenance_tracks_collected_values(self):
         h = ConversationHarness()
@@ -728,23 +725,28 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(h.session.closed)
         self.assertEqual(h.session.final_status, "caller_ended")
 
-    async def test_invalid_company_second_decode_can_recover_goodbye(self):
+    async def test_invalid_company_does_not_trigger_extra_stt_decode(self):
         h = ConversationHarness()
         await h.start()
         first = {
-            "selected": "Dzień dobry. Dzień dobry.", "selected_score": -0.7, "mode":"company",
-            "audio_seconds":1.5, "pass1":{"text":"Dzień dobry. Dzień dobry.","score":-0.7,"rejected":False,"reason":""},
+            "selected": "Dzień dobry. Dzień dobry.", "selected_score": -0.70, "mode":"company",
+            "audio_seconds":1.5, "pass1":{"text":"Dzień dobry. Dzień dobry.","score":-0.70,"rejected":False,"reason":""},
             "pass2":None,"retry":False,"retry_reason":""
         }
-        second = {
-            "selected":"do widzenia","selected_score":-0.1,"mode":"confirmation",
-            "audio_seconds":1.5,"pass1":{"text":"do widzenia","score":-0.1,"rejected":False,"reason":""},
-            "pass2":None,"retry":False,"retry_reason":""
-        }
-        with patch.object(audiosocket, "transcribe_pcm16", side_effect=[first, second]), patch.object(audiosocket, "add_message", return_value=None):
+        calls = 0
+
+        def fake_stt(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return first
+
+        with patch.object(audiosocket, "transcribe_pcm16", side_effect=fake_stt), patch.object(audiosocket, "add_message", return_value=None):
             await h.session.process_utterance(b"\x00"*24000)
-        self.assertTrue(h.session.closed)
-        self.assertEqual(h.session.final_status, "caller_ended")
+
+        self.assertEqual(calls, 1)
+        self.assertFalse(h.session.closed)
+        self.assertTrue(h.session.awaiting_company)
+
 
     async def test_three_unusable_company_utterances_switch_to_phone_recovery(self):
         h = ConversationHarness()
