@@ -44,6 +44,26 @@ class AdaptiveSTTTests(unittest.TestCase):
             "Kardiologia PULSMED Przychodnia Vena",
         )
 
+    def test_one_second_known_hallucination_skips_second_decode(self):
+        model = FakeModel([
+            ("Produkcja Polskie Towarzystwo Astronomiczne Telewizja Polska", -0.39),
+        ])
+        with patch.object(stt, "get_model", return_value=model):
+            result = stt.transcribe_pcm16(
+                b"\x00" * int(16000 * 1.0),
+                model_name="medium",
+                device="cpu",
+                compute_type="int8",
+                sample_rate=8000,
+                initial_prompt="",
+                mode="company",
+                return_metadata=True,
+                hotwords="",
+            )
+        self.assertEqual(result["selected"], "")
+        self.assertEqual(result["retry_reason"], "short_rejected_audio")
+        self.assertEqual(len(model.calls), 1)
+
     def test_company_training_credit_hallucination_is_rejected(self):
         for sample in (
             "Produkcja Polskie Towarzystwo Astronomiczne Telewizja Polska",
