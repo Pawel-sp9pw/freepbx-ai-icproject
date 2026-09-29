@@ -353,6 +353,7 @@ def looks_like_invalid_problem_description(value: str):
         "dziekuje za ogladanie",
         "dzieki za uwage",
         "arigatou gozaimasu",
+        "wszystko w porzadku",
     )
     if any(fragment in folded for fragment in bad_fragments):
         return True
@@ -1161,13 +1162,13 @@ class CallSession:
             return "firma nazwa numer telefon kontakt opis problem"
 
         if self.awaiting_correction and self.correction_field == "company":
-            return customer_names
+            return ""
 
         if self.awaiting_company_phone_recovery:
             return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
 
         if self.awaiting_company:
-            return customer_names
+            return ""
 
         if self.awaiting_correction and self.correction_field == "contact":
             return "zero jeden dwa trzy cztery pięć sześć siedem osiem dziewięć"
@@ -1499,6 +1500,28 @@ class CallSession:
             "koniec",
         )
         if any(phrase in normalized for phrase in goodbye_phrases):
+            in_problem_state = self.awaiting_problem or (
+                self.awaiting_correction and self.correction_field == "description"
+            )
+            try:
+                weak_goodbye = selected_score is None or float(selected_score) < -0.45
+            except (TypeError, ValueError):
+                weak_goodbye = True
+            suspicious_problem_goodbye = (
+                in_problem_state
+                and (
+                    weak_goodbye
+                    or "wszystko w porządku" in normalized
+                    or "wszystko w porzadku" in normalized
+                )
+            )
+            if suspicious_problem_goodbye:
+                self.problem_recognition_failures += 1
+                await self.say(
+                    "Nie udało mi się wiarygodnie rozpoznać opisu problemu. Proszę powtórzyć."
+                )
+                return
+
             # Clear local confirmation states before ending the call so the
             # session cannot remain logically pending after a goodbye.
             self.company_confirmation_pending = False
@@ -1979,6 +2002,9 @@ class CallSession:
                 elif numericish:
                     await self.say("Nie znalazłem firmy po tym numerze. Proszę podać numer jeszcze raz.")
                 else:
+                    self.awaiting_contact_dtmf = True
+                    self.dtmf_contact_buffer = ""
+                    self.dtmf_contact_context = "company_recovery"
                     await self.say(
                         "Nie udało mi się rozpoznać numeru telefonu. "
                         "Proszę podać numer albo wpisać go na klawiaturze telefonu."
@@ -2010,37 +2036,6 @@ class CallSession:
                         "Nie udało mi się pewnie rozpoznać nazwy firmy. "
                         "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
                     )
-                    return
-                try:
-                    retry_result = await asyncio.to_thread(
-                        transcribe_pcm16,
-                        pcm,
-                        self.settings["whisper_model"],
-                        self.settings["whisper_device"],
-                        self.settings["whisper_compute_type"],
-                        8000,
-                        "",
-                        "confirmation",
-                        True,
-                        int(self.settings.get("stt_workers", 2) or 2),
-                        self.call_id,
-                    )
-                    retry_text = str((retry_result or {}).get("selected", "") if isinstance(retry_result, dict) else (retry_result or ""))
-                except Exception:
-                    retry_text = ""
-                retry_norm = " ".join(retry_text.lower().strip(" .,!?:;").split())
-                if looks_like_ticket_cancellation(retry_text):
-                    self.cancellation_suspected = True
-                    self.final_status = "caller_cancelled"
-                    await self.say("Rozumiem. Nie będę zakładać zgłoszenia. Do widzenia.")
-                    self.closed = True
-                    self.writer.close()
-                    return
-                if any(x in retry_norm for x in ("do widzenia", "do zobaczenia")):
-                    self.final_status = "caller_ended"
-                    await self.say("Dziękuję za rozmowę. Do widzenia.")
-                    self.closed = True
-                    self.writer.close()
                     return
                 await self.say(
                     "Nie udało mi się wiarygodnie rozpoznać nazwy firmy. "
