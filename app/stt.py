@@ -46,6 +46,9 @@ KNOWN_WHISPER_HALLUCINATIONS = (
     "subskryb",
     "youtube.com",
     "youtu.be",
+    "towarzystwo astronomiczne",
+    "telewizja polska",
+    "produkcja polskie towarzystwo",
 )
 
 
@@ -128,7 +131,7 @@ def _confidence_floor_reason(score, mode: str):
     if score is None or mode == "confirmation":
         return ""
     thresholds = {
-        "company": -0.95,
+        "company": -1.20,
         "problem": -0.95,
         "contact": -1.05,
         "normal": -1.05,
@@ -495,6 +498,17 @@ def transcribe_pcm16(
         ):
             meta["retry"] = False
             meta["retry_reason"] = "short_rejected_audio"
+            meta["selected"] = ""
+            meta["selected_score"] = None
+            return meta if return_metadata else ""
+
+        if (
+            mode == "company"
+            and first_bad
+            and first_reason.startswith("low_confidence:")
+        ):
+            meta["retry"] = False
+            meta["retry_reason"] = first_reason
             meta["selected"] = ""
             meta["selected_score"] = None
             return meta if return_metadata else ""
