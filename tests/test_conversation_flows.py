@@ -230,6 +230,57 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("zero", hotwords)
         self.assertIn("dziewięć", hotwords)
 
+    async def test_company_phone_recovery_accepts_dtmf_immediately_when_offered(self):
+        h = ConversationHarness()
+        h.session.customer_directory = [{"name": "Kardiologia PULSMED", "phone": "693693970"}]
+        await h.start()
+        h.session.awaiting_company = True
+        h.session.awaiting_company_phone_recovery = True
+
+        await h.user("Momencik, nie pamiętam numeru.", score=-0.20)
+        self.assertTrue(h.session.awaiting_contact_dtmf)
+        self.assertEqual(h.session.dtmf_contact_context, "company_recovery")
+
+        await h.session.handle_dtmf(b"693693970#")
+        self.assertEqual(h.session.ticket_data["company"], "Kardiologia PULSMED")
+        self.assertEqual(h.session.ticket_data["contact"], "693693970")
+        self.assertTrue(h.session.awaiting_problem)
+
+    async def test_low_confidence_goodbye_hallucination_during_problem_does_not_end_call(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Kardiologia PULSMED",
+            "contact": "693693970",
+        }
+        h.session.company_trusted = True
+        h.session.contact_trusted = True
+        h.session.awaiting_company = False
+        h.session.awaiting_problem = True
+
+        await h.user("Wszystko w porządku, do zobaczenia.", score=-0.85)
+
+        self.assertFalse(h.session.closed)
+        self.assertTrue(h.session.awaiting_problem)
+        self.assertEqual(h.saved, [])
+        self.assertTrue(any("rozpoznać opisu problemu" in x.lower() for x in h.spoken))
+
+    async def test_high_confidence_explicit_goodbye_during_problem_still_ends_call(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Kardiologia PULSMED",
+            "contact": "693693970",
+        }
+        h.session.company_trusted = True
+        h.session.contact_trusted = True
+        h.session.awaiting_company = False
+        h.session.awaiting_problem = True
+
+        await h.user("Do widzenia", score=-0.10)
+
+        self.assertTrue(h.session.closed)
+        self.assertEqual(h.session.final_status, "caller_ended")
+        self.assertEqual(h.saved, [])
+
     async def test_company_phone_recovery_non_number_does_not_become_company(self):
         h = ConversationHarness()
         h.session.customer_directory = [{"name": "Kardiologia PULSMED", "phone": "693693970"}]
@@ -265,12 +316,12 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         for sample in samples:
             self.assertTrue(audiosocket.looks_like_invalid_company_name(sample), sample)
 
-    async def test_company_state_does_not_use_sentence_initial_prompt(self):
+    async def test_company_state_uses_no_prompt_and_no_directory_hotwords(self):
         h = ConversationHarness()
         h.session.customer_directory = [{"name": "Pizzeria Roma", "phone": "600100200"}]
         await h.start()
         self.assertEqual(h.session.stt_prompt_for_state(), "")
-        self.assertIn("Pizzeria Roma", h.session.stt_hotwords_for_state())
+        self.assertEqual(h.session.stt_hotwords_for_state(), "")
 
     async def test_whisper_url_hallucination_is_not_accepted_as_company(self):
         h = ConversationHarness()
