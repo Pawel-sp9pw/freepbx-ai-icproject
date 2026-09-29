@@ -31,7 +31,7 @@ class ConversationHarness:
         test_settings = {
             "customer_directory": "",
             "company_alias_dictionary": "",
-            "problem_dictionary": "e-recepta\nP1\nNFZ\nfaktura\ndrukarka fiskalna",
+            "problem_dictionary": "e-recepta\ne-recepty\nP1\nNFZ\nfaktura\ndrukarka fiskalna",
             "whisper_model": "small",
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
@@ -276,8 +276,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.session.stt_mode_for_state(), "contact")
         self.assertEqual(h.session.stt_prompt_for_state(), "")
         hotwords = h.session.stt_hotwords_for_state().lower()
-        self.assertIn("zero", hotwords)
-        self.assertIn("dziewięć", hotwords)
+        self.assertEqual(hotwords, "0 1 2 3 4 5 6 7 8 9")
 
     async def test_company_phone_recovery_accepts_dtmf_immediately_when_offered(self):
         h = ConversationHarness()
