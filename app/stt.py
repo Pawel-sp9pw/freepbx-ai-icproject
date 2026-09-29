@@ -487,15 +487,22 @@ def transcribe_pcm16(
                 )
             first_text = ""
 
-        # Very short audio immediately after TTS often contains only residual
-        # prompt leakage / subtitle hallucinations. A second heavy decode of the
-        # same ~0.6 s fragment consistently produced another hallucination and
-        # only consumed CPU. Drop it and wait for the caller's real utterance.
-        if (
+        # Residual TTS / training-credit hallucinations are common around
+        # 0.6-1.0 s. If pass 1 is already a known hallucination there is no
+        # value in spending another full Whisper decode on the same audio.
+        # Keep the wider 1.10 s window only for blacklist-confirmed
+        # hallucinations; generic prompt/repetition handling remains stricter.
+        short_known_hallucination = (
+            first_bad
+            and first_reason == "known_whisper_hallucination"
+            and audio_seconds <= 1.10
+        )
+        short_prompt_artifact = (
             first_bad
             and audio_seconds <= 0.80
-            and first_reason in ("prompt_leak", "known_whisper_hallucination", "repeated_trigram")
-        ):
+            and first_reason in ("prompt_leak", "repeated_trigram")
+        )
+        if short_known_hallucination or short_prompt_artifact:
             meta["retry"] = False
             meta["retry_reason"] = "short_rejected_audio"
             meta["selected"] = ""
