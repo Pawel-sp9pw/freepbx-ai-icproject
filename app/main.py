@@ -17,7 +17,7 @@ from .icproject import ICProjectClient
 from .audiosocket import start_audiosocket_server
 from .stt import get_model
 from .wireguard import status as wireguard_status, apply_config as wireguard_apply
-from .monitoring import init_db, runtime_status, service_status, linux_resource_status, resource_history, list_calls, get_call, get_recent_calls_with_messages
+from .monitoring import init_db, runtime_status, service_status, linux_resource_status, resource_history, list_calls, count_calls, get_call, get_recent_calls_with_messages
 from .call_registry import register_caller, last_registration
 
 logging.basicConfig(
@@ -345,8 +345,11 @@ async def performance_profile(profile: str = Form(...)):
 
 @app.get("/api/calls")
 async def calls(limit: int = 30):
-    items = await asyncio.to_thread(list_calls, limit)
-    return {"items": items}
+    items, total = await asyncio.gather(
+        asyncio.to_thread(list_calls, limit),
+        asyncio.to_thread(count_calls),
+    )
+    return {"items": items, "count": len(items), "total": total}
 
 
 @app.get("/api/calls/debug-bundle")
