@@ -139,6 +139,11 @@
         </tbody>
       </table>
     </div>
+
+    <div class="call-tools" style="align-items:center;margin-top:10px">
+      <button type="button" class="test" id="loadOlderCallsButton" onclick="loadOlderCalls()" style="display:none">Wczytaj starsze rozmowy</button>
+      <span id="callsHistoryStatus" class="muted"></span>
+    </div>
   </div>
 
 
@@ -593,6 +598,9 @@ PersistentKeepalive = 25"></textarea>
   const expandedCallDays=new Set();
   let callGroupsInitialized=false;
   let callsRefreshBusy=false;
+  let callsVisibleLimit=200;
+  const callsPageSize=200;
+  let callsTotalCount=0;
   let callDetailsRefreshBusy=false;
   const openSttDetails=new Set();
 
@@ -972,14 +980,29 @@ PersistentKeepalive = 25"></textarea>
     await refreshCalls();
   }
 
+  async function loadOlderCalls(){
+    if(callsRefreshBusy) return;
+    callsVisibleLimit=Math.min(5000,callsVisibleLimit+callsPageSize);
+    await refreshCalls();
+  }
+
   async function refreshCalls(){
     if(callsRefreshBusy) return;
     callsRefreshBusy=true;
     const body=document.getElementById('callsTable');
     try{
-      const r=await fetch('/api/calls?limit=200',{cache:'no-store'});
+      const r=await fetch('/api/calls?limit='+encodeURIComponent(callsVisibleLimit),{cache:'no-store'});
       const j=await r.json();
       const items=j.items || [];
+      callsTotalCount=Number(j.total ?? items.length);
+      const historyStatus=document.getElementById('callsHistoryStatus');
+      const olderButton=document.getElementById('loadOlderCallsButton');
+      if(historyStatus){
+        historyStatus.textContent='Wyświetlono '+items.length+' z '+callsTotalCount+' rozmów.';
+      }
+      if(olderButton){
+        olderButton.style.display=items.length<callsTotalCount && callsVisibleLimit<5000 ? '' : 'none';
+      }
       if(!items.length){
         body.innerHTML='<tr><td colspan="7" class="muted">Brak zapisanych rozmów.</td></tr>';
         expandedCallId=null;
