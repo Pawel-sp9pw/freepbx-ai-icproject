@@ -30,6 +30,8 @@ class ConversationHarness:
         self.writer = DummyWriter()
         test_settings = {
             "customer_directory": "",
+            "company_alias_dictionary": "",
+            "problem_dictionary": "e-recepta\nP1\nNFZ\nfaktura\ndrukarka fiskalna",
             "whisper_model": "small",
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
@@ -105,6 +107,56 @@ async def _no_sleep(*args, **kwargs):
 
 
 class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_company_alias_dictionary_matches_without_phone(self):
+        h = ConversationHarness()
+        h.session.settings["company_alias_dictionary"] = (
+            "Kardiologia PULSMED | Pulsmed | Kardiologia Puls | Poradnia Pulsmed"
+        )
+        h.session.customer_directory = audiosocket.merge_company_alias_dictionary(
+            [],
+            audiosocket.parse_company_alias_dictionary(
+                h.session.settings["company_alias_dictionary"]
+            ),
+        )
+        matched, score = audiosocket.match_customer(
+            "Poradnia Pulsmed", "", h.session.customer_directory
+        )
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched["name"], "Kardiologia PULSMED")
+        self.assertEqual(matched.get("phone", ""), "")
+        self.assertGreaterEqual(score, 0.9)
+
+    async def test_problem_dictionary_is_used_as_problem_hotwords(self):
+        h = ConversationHarness()
+        h.session.problem_dictionary = audiosocket.parse_problem_dictionary(
+            "e-recepta\nMediQus\nskaner kodów"
+        )
+        h.session.awaiting_company = False
+        h.session.awaiting_problem = True
+        hotwords = h.session.stt_hotwords_for_state()
+        self.assertIn("e-recepta", hotwords)
+        self.assertIn("MediQus", hotwords)
+        self.assertIn("skaner kodów", hotwords)
+
+    async def test_contact_hotwords_are_digits_not_number_words(self):
+        h = ConversationHarness()
+        h.session.awaiting_company = False
+        h.session.awaiting_contact = True
+        hotwords = h.session.stt_hotwords_for_state()
+        self.assertEqual(hotwords, "0 1 2 3 4 5 6 7 8 9")
+        self.assertNotIn("jeden", hotwords)
+
+    async def test_contact_stt_is_normalized_to_digits_before_state_machine(self):
+        h = ConversationHarness()
+        h.session.awaiting_company = False
+        h.session.awaiting_contact = True
+        await h.user(
+            "sześć zero cztery dziewięć cztery trzy dwa siedem cztery",
+            score=-0.20,
+        )
+        self.assertEqual(h.session.ticket_data["contact"], "604943274")
+        self.assertTrue(h.session.awaiting_problem)
+
     async def test_problem_state_uses_hotwords_without_initial_prompt(self):
         h = ConversationHarness()
         h.session.settings["stt_prompt"] = (
