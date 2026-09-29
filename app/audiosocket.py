@@ -1504,9 +1504,9 @@ class CallSession:
                 self.awaiting_correction and self.correction_field == "description"
             )
             try:
-                weak_goodbye = selected_score is None or float(selected_score) < -0.45
+                weak_goodbye = selected_score is not None and float(selected_score) < -0.45
             except (TypeError, ValueError):
-                weak_goodbye = True
+                weak_goodbye = False
             suspicious_problem_goodbye = (
                 in_problem_state
                 and (
