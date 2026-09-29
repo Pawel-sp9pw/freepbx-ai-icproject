@@ -160,8 +160,17 @@ def _stt_accuracy_summary(raw_debug_rows):
     return round(sum(values) / len(values)), len(values)
 
 
+def count_calls():
+    with _db() as conn:
+        row = conn.execute("SELECT COUNT(*) AS count FROM calls").fetchone()
+    return int(row["count"] or 0)
+
+
 def list_calls(limit=30):
-    limit = max(1, min(int(limit), 200))
+    # Summary rows are lightweight and details are fetched lazily. Allow a
+    # larger history window than the old hard cap of 200 so the UI can load
+    # older pages on demand without hiding existing database rows.
+    limit = max(1, min(int(limit), 5000))
     with _db() as conn:
         rows = conn.execute(
             """
