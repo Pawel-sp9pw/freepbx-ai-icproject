@@ -269,12 +269,29 @@
         </div>
       </div>
 
-      <label>Słownik klientów
+      <label>Słownik klientów z numerami
         <textarea name="customer_directory" placeholder="Virtual World | 792032104&#10;Przychodnia Test | 600100200">{{s.customer_directory}}</textarea>
       </label>
       <div class="muted">
-        Jeden klient w wierszu: <code>Nazwa firmy | numer telefonu</code>. Agent użyje listy do bezpiecznego
-        dopasowania rozpoznanej nazwy i numeru. Lista nie jest dodawana do promptu Whispera podczas pytania o firmę.
+        Jeden klient w wierszu: <code>Nazwa firmy | numer telefonu</code>. Ten słownik służy do bezpiecznego
+        rozpoznawania po CallerID / numerze i pozostaje niezależny od aliasów nazw.
+      </div>
+
+      <label>Słownik nazw firm i aliasów
+        <textarea name="company_alias_dictionary" placeholder="Kardiologia PULSMED | Pulsmed | Kardiologia Puls | Poradnia Pulsmed&#10;Rehabilitacja ETOS | Etos | Rehabilitacja">{{s.company_alias_dictionary}}</textarea>
+      </label>
+      <div class="muted">
+        Format: <code>Nazwa docelowa | alias 1 | alias 2 | ...</code>. Numer telefonu nie jest wymagany.
+        Agent dopasuje alias do nazwy docelowej. Słownik nie jest w całości przekazywany do hotwords Whispera,
+        aby nie powodować halucynacji nazw innych klientów.
+      </div>
+
+      <label>Słownik opisu problemu / terminów
+        <textarea name="problem_dictionary" placeholder="e-recepta&#10;P1&#10;NFZ&#10;MediQus&#10;drukarka fiskalna&#10;skaner kodów">{{s.problem_dictionary}}</textarea>
+      </label>
+      <div class="muted">
+        Jeden termin lub zwrot w wierszu; można też rozdzielać przecinkami. Te pozycje są używane jako
+        <code>hotwords</code> wyłącznie podczas rozpoznawania opisu problemu.
       </div>
 
       <label>Token CallerID z FreePBX
