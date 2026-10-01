@@ -1968,6 +1968,27 @@ class CallSession:
                     self.company_trusted = True
                     self.mark_ticket_field("company", "directory", match_score, True)
                 else:
+                    ranked_candidates = rank_company_candidates(company_text, self.customer_directory)
+                    if ranked_candidates:
+                        best_score, best_item, _ = ranked_candidates[0]
+                        second_score = ranked_candidates[1][0] if len(ranked_candidates) > 1 else 0.0
+                        margin = best_score - second_score
+                        if (
+                            best_item.get("from_company_dictionary")
+                            and best_score >= 0.42
+                            and margin >= 0.10
+                        ):
+                            self.company_confirmation_pending = True
+                            self.company_candidate = str(best_item.get("name", "") or "").strip()
+                            self.company_candidate_score = float(selected_score) if selected_score is not None else None
+                            self.company_confirmation_context = "correction"
+                            self.company_candidate_phone = best_item.get("phone") or ""
+                            await self.say(
+                                f"Czy chodzi o firmę {self.company_candidate}? "
+                                "Proszę powiedzieć tak albo nie."
+                            )
+                            return
+
                     confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                     low_confidence = (
                         selected_score is not None
@@ -2212,6 +2233,28 @@ class CallSession:
                     self.contact_trusted = True
                     self.mark_ticket_field("contact", "directory", None, True)
             else:
+                ranked_candidates = rank_company_candidates(company_text, self.customer_directory)
+                if ranked_candidates:
+                    best_score, best_item, _ = ranked_candidates[0]
+                    second_score = ranked_candidates[1][0] if len(ranked_candidates) > 1 else 0.0
+                    margin = best_score - second_score
+                    if (
+                        best_item.get("from_company_dictionary")
+                        and best_score >= 0.42
+                        and margin >= 0.10
+                    ):
+                        self.company_confirmation_pending = True
+                        self.company_candidate = str(best_item.get("name", "") or "").strip()
+                        self.company_candidate_score = float(selected_score) if selected_score is not None else None
+                        self.company_confirmation_context = "initial"
+                        self.company_candidate_phone = best_item.get("phone") or ""
+                        self.awaiting_company = False
+                        await self.say(
+                            f"Czy chodzi o firmę {self.company_candidate}? "
+                            "Proszę powiedzieć tak albo nie."
+                        )
+                        return
+
                 confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                 low_confidence = (
                     selected_score is not None
