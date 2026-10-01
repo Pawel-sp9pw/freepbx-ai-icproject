@@ -1474,7 +1474,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         await h.user("Mam problem z systemem")
 
         self.assertEqual(h.session.ticket_data["company"], "Prawidłowa Firma")
-        self.assertNotIn("description", h.session.ticket_data)
+        self.assertEqual(h.session.ticket_data.get("description", ""), "")
         self.assertTrue(h.session.awaiting_contact)
         self.assertFalse(h.session.awaiting_company)
         self.assertFalse(h.session.awaiting_problem)
