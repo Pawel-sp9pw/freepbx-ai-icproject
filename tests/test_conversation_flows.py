@@ -1459,6 +1459,23 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_runtime_has_no_ollama_call_path(self):
         self.assertFalse(hasattr(audiosocket, "ask_ollama"))
+        self.assertFalse(hasattr(audiosocket, "interpret_turn"))
+        self.assertFalse(hasattr(audiosocket.CallSession, "interpret_fallback"))
+
+    async def test_main_runtime_settings_drop_legacy_ollama_keys(self):
+        from app import config
+        legacy = {
+            **config.DEFAULTS,
+            "ollama_url": "http://127.0.0.1:11434",
+            "ollama_model": "qwen3:4b",
+            "system_prompt": "legacy",
+        }
+        with patch.object(config.SETTINGS_FILE, "exists", return_value=True), \
+             patch.object(config.SETTINGS_FILE, "read_text", return_value=__import__("json").dumps(legacy)):
+            loaded = config.load_settings()
+        self.assertNotIn("ollama_url", loaded)
+        self.assertNotIn("ollama_model", loaded)
+        self.assertNotIn("system_prompt", loaded)
 
     async def test_deterministic_fallback_asks_for_first_missing_field(self):
         h = ConversationHarness()
