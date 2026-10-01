@@ -107,6 +107,38 @@ async def _no_sleep(*args, **kwargs):
 
 
 class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_company_dictionary_tolerates_pulsmed_variants(self):
+        directory = audiosocket.merge_company_alias_dictionary(
+            [],
+            audiosocket.parse_company_alias_dictionary(
+                "Kardiologia | PulsMed | Kardiologia pulsmed\n"
+                "ETOS | Rehabilitacja | Rehabilitacja ETOS\n"
+                "Vena | Wena | Przychodnia Wena"
+            ),
+        )
+        for spoken in ("Pulsmed", "Puls Med", "Pulsmet", "Polsmed", "Kardiologia pulsmet"):
+            matched, score = audiosocket.match_customer(spoken, "", directory)
+            self.assertIsNotNone(matched, spoken)
+            self.assertEqual(matched["name"], "Kardiologia", spoken)
+            self.assertGreaterEqual(score, 0.54, spoken)
+
+    async def test_uncertain_company_uses_canonical_dictionary_confirmation(self):
+        h = ConversationHarness()
+        h.session.customer_directory = audiosocket.merge_company_alias_dictionary(
+            [],
+            audiosocket.parse_company_alias_dictionary(
+                "Kardiologia | PulsMed | Kardiologia pulsmed\n"
+                "ETOS | Rehabilitacja | Rehabilitacja ETOS"
+            ),
+        )
+        await h.start()
+
+        await h.user("Pulsment", score=-0.65)
+
+        self.assertTrue(h.session.company_confirmation_pending)
+        self.assertEqual(h.session.company_candidate, "Kardiologia")
+        self.assertTrue(any("czy chodzi o firmę kardiologia" in x.lower() for x in h.spoken))
+
     async def test_company_alias_dictionary_matches_without_phone(self):
         h = ConversationHarness()
         h.session.settings["company_alias_dictionary"] = (
