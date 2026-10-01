@@ -11,7 +11,7 @@ LEGACY_STT_PROMPT = "Rozmowa serwisowa po polsku. Nazwa firmy, numer telefonu, o
 CURRENT_STT_PROMPT = "Rozmowa telefoniczna z polskim serwisem IT. Dzwoniący podaje nazwę firmy, numer telefonu lub opis problemu."
 
 DEFAULTS = {
-    "whisper_model": "small",
+    "whisper_model": "medium",
     "whisper_device": "cpu",
     "whisper_compute_type": "int8",
     "stt_workers": 2,
