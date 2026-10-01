@@ -1403,6 +1403,17 @@ class CallSession:
                 matched_customer, match_score = match_customer(str(self.ticket_data.get("company", "") or ""), phone, self.customer_directory)
                 self.record_customer_match("dtmf_contact", str(self.ticket_data.get("company", "") or ""), phone, matched_customer, match_score)
                 if matched_customer:
+                    if matched_customer.get("from_company_dictionary") and match_score < 0.86:
+                        self.company_confirmation_pending = True
+                        self.company_candidate = str(matched_customer.get("name", "") or "").strip()
+                        self.company_candidate_score = float(selected_score) if selected_score is not None else None
+                        self.company_confirmation_context = "correction"
+                        self.company_candidate_phone = matched_customer.get("phone") or ""
+                        await self.say(
+                            f"Czy chodzi o firmę {self.company_candidate}? "
+                            "Proszę powiedzieć tak albo nie."
+                        )
+                        return
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
                     self.mark_ticket_field("company", "directory", match_score, True)
@@ -2225,6 +2236,18 @@ class CallSession:
             )
             self.record_customer_match("initial_company", company_text, phone, matched_customer, match_score)
             if matched_customer:
+                if matched_customer.get("from_company_dictionary") and match_score < 0.86:
+                    self.company_confirmation_pending = True
+                    self.company_candidate = str(matched_customer.get("name", "") or "").strip()
+                    self.company_candidate_score = float(selected_score) if selected_score is not None else None
+                    self.company_confirmation_context = "initial"
+                    self.company_candidate_phone = matched_customer.get("phone") or ""
+                    self.awaiting_company = False
+                    await self.say(
+                        f"Czy chodzi o firmę {self.company_candidate}? "
+                        "Proszę powiedzieć tak albo nie."
+                    )
+                    return
                 self.ticket_data["company"] = matched_customer["name"]
                 self.company_trusted = True
                 self.mark_ticket_field("company", "directory", match_score, True)
