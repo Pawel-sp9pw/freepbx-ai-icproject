@@ -1474,7 +1474,11 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             exists=lambda: True,
             read_text=lambda: __import__("json").dumps(legacy),
         )
-        with patch.object(config, "SETTINGS_FILE", fake_settings_file):
+        fake_data_dir = types.SimpleNamespace(
+            mkdir=lambda parents=True, exist_ok=True: None,
+        )
+        with patch.object(config, "SETTINGS_FILE", fake_settings_file), \
+             patch.object(config, "DATA_DIR", fake_data_dir):
             loaded = config.load_settings()
         self.assertNotIn("ollama_url", loaded)
         self.assertNotIn("ollama_model", loaded)
