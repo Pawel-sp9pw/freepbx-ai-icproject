@@ -1419,10 +1419,7 @@ class CallSession:
                         self.company_candidate_score = float(selected_score) if selected_score is not None else None
                         self.company_confirmation_context = "correction"
                         self.company_candidate_phone = matched_customer.get("phone") or ""
-                        await self.say(
-                            f"Czy chodzi o firmę {self.company_candidate}? "
-                            "Proszę powiedzieć tak albo nie."
-                        )
+                        await self.say(f"Czy chodzi o firmę {self.company_candidate}?")
                         return
                     self.ticket_data["company"] = matched_customer["name"]
                     self.company_trusted = True
@@ -2034,10 +2031,7 @@ class CallSession:
                         self.company_candidate_score = float(selected_score)
                         self.company_confirmation_context = "correction"
                         self.company_candidate_phone = ""
-                        await self.say(
-                            f"Czy dobrze zrozumiałem poprawioną nazwę: {company_text}? "
-                            "Proszę powiedzieć tak albo nie."
-                        )
+                        await self.say(f"Czy dobrze zrozumiałem poprawioną nazwę: {company_text}?")
                         return
                     self.ticket_data["company"] = company_text
                     self.company_trusted = bool(
@@ -2296,10 +2290,7 @@ class CallSession:
                         self.company_confirmation_context = "initial"
                         self.company_candidate_phone = best_item.get("phone") or ""
                         self.awaiting_company = False
-                        await self.say(
-                            f"Czy chodzi o firmę {self.company_candidate}? "
-                            "Proszę powiedzieć tak albo nie."
-                        )
+                        await self.say(f"Czy chodzi o firmę {self.company_candidate}?")
                         return
 
                 confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
@@ -2325,7 +2316,7 @@ class CallSession:
                     self.company_confirmation_context = "initial"
                     self.company_candidate_phone = phone or ""
                     self.awaiting_company = False
-                    await self.say(f"Czy dobrze zrozumiałem: firma {company_text}? Proszę powiedzieć tak albo nie.")
+                    await self.say(f"Czy dobrze zrozumiałem: firma {company_text}?")
                     return
                 self.ticket_data["company"] = company_text
                 self.company_trusted = bool(
