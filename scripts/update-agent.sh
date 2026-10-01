@@ -48,6 +48,11 @@ install -m 0644 systemd/freepbx-ai.service /etc/systemd/system/freepbx-ai.servic
 install -m 0644 systemd/piper-ai.service /etc/systemd/system/piper-ai.service
 systemctl daemon-reload
 
+echo "Wyłączanie nieużywanej usługi Ollama..."
+if systemctl list-unit-files ollama.service >/dev/null 2>&1; then
+  systemctl disable --now ollama.service || true
+fi
+
 echo
 echo "[4/6] Restart Piper..."
 systemctl restart piper-ai
