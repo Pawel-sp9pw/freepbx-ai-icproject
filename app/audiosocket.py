@@ -420,6 +420,16 @@ def looks_like_invalid_company_name(value: str):
     return False
 
 
+def clean_problem_description(value: str):
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return ""
+    # Conservative cleanup: only remove a final standalone greeting/interjection
+    # after an already complete sentence. Never remove it from the middle.
+    text = re.sub(r"([.!?])\s*(?:hej|hey)[.!?]*$", r"\1", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
 def looks_like_invalid_problem_description(value: str):
     normalized = " ".join((value or "").lower().strip(" .,!?:;").split())
     if not normalized:
@@ -1512,6 +1522,19 @@ class CallSession:
                 log.info("[%s] Ignoring residual prompt artifact after TTS", self.call_id)
                 return
 
+            if (
+                (self.company_confirmation_pending or self.confirmation_pending)
+                and audio_seconds <= 0.80
+                and self.last_tts_end
+                and (now - self.last_tts_end) <= 1.0
+            ):
+                log.info(
+                    "[%s] Ignoring short empty confirmation residual after TTS (%.2fs)",
+                    self.call_id,
+                    audio_seconds,
+                )
+                return
+
             # Real company speech that produced no usable transcript still counts
             # toward escaping the company-name loop. Ignore the ~0.6 s residual
             # prompt echo right after TTS.
@@ -2062,6 +2085,7 @@ class CallSession:
                         self.mark_ticket_field("contact", "directory", None, True)
 
             elif self.correction_field == "description":
+                text = clean_problem_description(text)
                 invalid_problem = looks_like_invalid_problem_description(text)
                 try:
                     very_low_problem = selected_score is not None and float(selected_score) < -0.80
@@ -2415,6 +2439,7 @@ class CallSession:
         # Explicit conversation state beats LLM inference. If we just asked
         # for the problem, accept the next non-empty utterance as description.
         if self.awaiting_problem and not self.ticket_data.get("description"):
+            text = clean_problem_description(text)
             if looks_like_human_handoff_request(text):
                 await self.say(
                     "Mogę przyjąć zgłoszenie dla serwisu. "
