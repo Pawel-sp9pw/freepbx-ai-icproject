@@ -13,7 +13,6 @@ import webrtcvad
 from .config import load_settings, decrypt_secret
 from .stt import transcribe_pcm16
 from .tts import synthesize_pcm8k
-from .llm import looks_like_prompt_injection
 from .icproject import ICProjectClient
 from .monitoring import call_started, add_message, finish_call
 from .call_registry import consume_caller
@@ -24,6 +23,27 @@ TYPE_HANGUP = 0x00
 TYPE_UUID = 0x01
 TYPE_DTMF = 0x03
 TYPE_PCM_8K = 0x10
+
+
+_META_PATTERNS = (
+    r"zignoruj\s+(wszystkie\s+)?(poprzednie\s+)?instrukc",
+    r"ignore\s+(all\s+)?previous\s+instructions",
+    r"system\s*prompt",
+    r"prompt\s+system",
+    r"poka[zż]\s+(mi\s+)?prompt",
+    r"ujawnij\s+(has[łl]o|token|klucz|sekret|instrukc)",
+    r"podaj\s+(has[łl]o|token|klucz|sekret)",
+    r"wykonaj\s+(komend|polecen)",
+    r"uruchom\s+(komend|polecen|shell|terminal)",
+    r"developer\s+message",
+)
+
+
+def looks_like_prompt_injection(text: str) -> bool:
+    value = " ".join(str(text or "").lower().split())
+    if not value:
+        return False
+    return any(re.search(pattern, value, re.IGNORECASE) for pattern in _META_PATTERNS)
 
 async def read_exactly_or_none(reader, n):
     try:
@@ -1083,19 +1103,6 @@ class CallSession:
             self.writer.close()
             return False
 
-    async def interpret_fallback(self, expected: str, text: str):
-        try:
-            return await interpret_turn(
-                self.settings["ollama_url"],
-                self.settings["ollama_model"],
-                expected,
-                text,
-                dict(self.ticket_data),
-            )
-        except Exception:
-            log.exception("[%s] LLM fallback error", self.call_id)
-            return {"intent": "unknown", "company": "", "contact": "", "description": ""}
-
     async def refuse_out_of_scope(self):
         if self.company_confirmation_pending:
             await self.say("Mogę obsłużyć tylko bieżące zgłoszenie. Proszę powiedzieć tak albo nie.")
@@ -2049,7 +2056,6 @@ class CallSession:
             return
 
         # Fast deterministic state machine for normal calls.
-        # Ollama is only a fallback for corrections / unusual utterances.
         if self.awaiting_company:
             phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             company_text = clean_company_display_name(text) or text.strip()
