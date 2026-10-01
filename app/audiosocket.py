@@ -13,7 +13,7 @@ import webrtcvad
 from .config import load_settings, decrypt_secret
 from .stt import transcribe_pcm16
 from .tts import synthesize_pcm8k
-from .llm import ask_ollama, interpret_turn, looks_like_prompt_injection
+from .llm import looks_like_prompt_injection
 from .icproject import ICProjectClient
 from .monitoring import call_started, add_message, finish_call
 from .call_registry import consume_caller
@@ -2374,146 +2374,13 @@ class CallSession:
                 await self.say_confirmation_summary()
                 return
 
-        # Give the LLM an explicit snapshot of already collected data. This is
-        # more reliable with small local models than expecting them to reconstruct
-        # state only from previous JSON turns.
-        state_context = dict(self.ticket_data)
-        llm_history = list(self.history)
-        if state_context:
-            llm_history.append({
-                "role": "system",
-                "content": "Już zebrane dane zgłoszenia (zachowaj je): "
-                           + json.dumps(state_context, ensure_ascii=False),
-            })
-
-        try:
-            result = await ask_ollama(
-                self.settings["ollama_url"],
-                self.settings["ollama_model"],
-                self.settings["system_prompt"],
-                llm_history,
-            )
-        except Exception:
-            log.exception("[%s] LLM error", self.call_id)
-            await self.say("Wystąpił chwilowy problem z systemem. Proszę spróbować ponownie.")
-            return
-
-        # LLM output is used only as a parser. The model is not allowed to
-        # choose arbitrary customer-facing speech.
-        reply = ""
-        ticket_update = result.get("ticket") or {}
-
-        # General LLM fallback is fill-only. It may add a missing field but it
-        # may NEVER overwrite data already collected for this call.
-        before_fill = {
-            key: str(self.ticket_data.get(key, "") or "")
-            for key in ("company", "contact", "description")
-        }
-        apply_llm_fill_only(self.ticket_data, ticket_update)
-        for field in ("company", "contact", "description"):
-            if not before_fill[field] and str(self.ticket_data.get(field, "") or "").strip():
-                self.mark_ticket_field(field, "llm_fallback", None, False)
-
-        # Normalize contact phone numbers recognized with spaces, commas or dashes.
-        contact_value = str(self.ticket_data.get("contact", "") or "")
-        contact_digits = extract_phone_digits(
-            contact_value,
-            self.settings.get("phone_validation_mode", "pl"),
-        )
-        if contact_digits:
-            self.ticket_data["contact"] = contact_digits
-        elif contact_value:
-            self.ticket_data["contact"] = ""
-
-        matched_customer, match_score = match_customer(
-            str(self.ticket_data.get("company", "") or ""),
-            str(self.ticket_data.get("contact", "") or ""),
-            self.customer_directory,
-        )
-        self.record_customer_match(
-            "fallback",
-            str(self.ticket_data.get("company", "") or ""),
-            str(self.ticket_data.get("contact", "") or ""),
-            matched_customer,
-            match_score,
-        )
-        if matched_customer:
-            self.ticket_data["company"] = matched_customer["name"]
-            self.company_trusted = True
-            self.mark_ticket_field("company", "directory", match_score, True)
-            if not self.ticket_data.get("contact") and matched_customer.get("phone"):
-                self.ticket_data["contact"] = matched_customer["phone"]
-                self.contact_trusted = True
-                self.mark_ticket_field("contact", "directory", None, True)
-
-        # If we are clearly asking for a problem and the caller gives a real
-        # utterance, accept it as the description even if the LLM is too strict.
-        previous_agent = ""
-        for item in reversed(self.history[:-1]):
-            if item.get("role") == "assistant":
-                previous_agent = item.get("content", "")
-                break
-        problem_words = ("problem", "opis", "co się dzieje", "usterk")
-        if (
-            not self.ticket_data.get("description")
-            and len(text.strip()) >= 3
-            and not looks_like_ticket_meta_request(text)
-            and any(word in previous_agent.lower() for word in problem_words)
-        ):
-            self.ticket_data["description"] = text.strip()
-
-        if self.ticket_data.get("description") and not self.ticket_data.get("title"):
-            desc = self.ticket_data["description"].strip()
-            self.ticket_data["title"] = desc[:80] or "Zgłoszenie telefoniczne"
-
-        result["ticket"] = dict(self.ticket_data)
-
-        company_ok = bool(str(self.ticket_data.get("company", "")).strip())
-        contact_ok = bool(str(self.ticket_data.get("contact", "")).strip())
-        description_ok = bool(str(self.ticket_data.get("description", "")).strip())
-
-        # Backend owns the conversation state and every spoken response.
-        # The LLM cannot move the call to an unrelated topic.
-        if company_ok and contact_ok and description_ok:
-            result["done"] = True
-            reply = "Dziękuję, mam potrzebne informacje."
-        else:
-            result["done"] = False
-            self.awaiting_company = False
-            self.awaiting_contact = False
-            self.awaiting_problem = False
-
-            if not company_ok:
-                self.awaiting_company = True
-                reply = "Proszę podać nazwę firmy."
-            elif not contact_ok:
-                self.awaiting_contact = True
-                reply = "Proszę podać numer telefonu kontaktowego."
-            elif not description_ok:
-                self.awaiting_problem = True
-                reply = "Proszę opisać problem."
-            else:
-                reply = "Proszę podać informacje dotyczące bieżącego zgłoszenia."
-
-        self.history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
-
-        if result.get("done"):
-            company = str(self.ticket_data.get("company", "") or "").strip() or "nie podano"
-            contact = str(self.ticket_data.get("contact", "") or "").strip() or "nie podano"
-            spoken_contact = speak_phone(contact) if contact != "nie podano" else contact
-            description = str(self.ticket_data.get("description", "") or "").strip() or "nie podano"
-
-            self.awaiting_correction = False
-            if self.can_auto_finalize(selected_score):
-                self.confirmation_pending = False
-                self.confirmation_misses = 0
-                await self.finalize_ticket()
-                return
-
-            self.confirmation_pending = True
-            self.confirmation_misses = 0
-            await self.say_confirmation_summary()
-            return
+        # Deterministic recovery path. Normal ticket collection should already
+        # have returned from an explicit state above; this branch exists only as
+        # a safety net for stale/legacy state combinations. It deliberately does
+        # not call an LLM.
+        company_ok = bool(str(self.ticket_data.get("company", "") or "").strip())
+        contact_ok = bool(str(self.ticket_data.get("contact", "") or "").strip())
+        description_ok = bool(str(self.ticket_data.get("description", "") or "").strip())
 
         if self.turns >= int(self.settings.get("max_turns", 8)):
             await self.say(
@@ -2524,14 +2391,39 @@ class CallSession:
             self.writer.close()
             return
 
-        reply_lower = reply.lower()
-        if (
-            not self.ticket_data.get("description")
-            and any(word in reply_lower for word in ("opis problemu", "opisać problem", "opisz problem", "jaki jest problem"))
-        ):
-            self.awaiting_problem = True
+        self.awaiting_company = False
+        self.awaiting_contact = False
+        self.awaiting_problem = False
 
-        await self.say(reply)
+        if not company_ok:
+            self.awaiting_company = True
+            await self.say("Proszę podać nazwę firmy.")
+            return
+
+        if not contact_ok:
+            self.awaiting_contact = True
+            await self.say("Proszę podać numer telefonu kontaktowego.")
+            return
+
+        if not description_ok:
+            self.awaiting_problem = True
+            await self.say("Proszę opisać problem.")
+            return
+
+        description = str(self.ticket_data.get("description", "") or "").strip()
+        if not self.ticket_data.get("title"):
+            self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
+
+        if self.can_auto_finalize(self.early_problem_score):
+            self.confirmation_pending = False
+            self.confirmation_misses = 0
+            await self.finalize_ticket()
+            return
+
+        self.confirmation_pending = True
+        self.confirmation_misses = 0
+        await self.say_confirmation_summary()
+        return
 
 async def handle_client(reader, writer):
     peer = writer.get_extra_info("peername")
