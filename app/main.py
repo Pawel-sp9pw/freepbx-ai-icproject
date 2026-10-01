@@ -30,9 +30,6 @@ app = FastAPI(title="FreePBX AI → IC Project")
 ADMIN_PASSWORD_FILE = Path("/etc/freepbx-ai/admin-password")
 UPDATE_STATE_FILE = Path("/var/lib/freepbx-ai/update.state")
 UPDATE_LOG_FILE = Path("/var/lib/freepbx-ai/update.log")
-MODEL_PULL_STATE_FILE = Path("/var/lib/freepbx-ai/model-pull.state")
-MODEL_PULL_LOG_FILE = Path("/var/lib/freepbx-ai/model-pull.log")
-MODEL_PULL_MODEL_FILE = Path("/var/lib/freepbx-ai/model-pull.model")
 TEST_STATE_FILE = Path("/var/lib/freepbx-ai/tests.state")
 TEST_LOG_FILE = Path("/var/lib/freepbx-ai/tests.log")
 
@@ -257,25 +254,21 @@ async def resources_history(hours: int = 24):
 async def performance_profile(profile: str = Form(...)):
     profiles = {
         "fast": {
-            "ollama_model": "qwen3:1.7b",
             "whisper_model": "small",
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
         },
         "balanced": {
-            "ollama_model": "qwen3:4b",
             "whisper_model": "small",
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
         },
         "accurate": {
-            "ollama_model": "qwen3:1.7b",
             "whisper_model": "medium",
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
         },
         "very_fast": {
-            "ollama_model": "qwen3:0.6b",
             "whisper_model": "tiny",
             "whisper_device": "cpu",
             "whisper_compute_type": "int8",
@@ -286,59 +279,9 @@ async def performance_profile(profile: str = Form(...)):
         return {"ok": False, "message": "Nieznany profil."}
 
     save_settings(selected)
-
-    ollama_bin = shutil.which("ollama")
-    if not ollama_bin:
-        return {
-            "ok": False,
-            "message": "Profil zapisano, ale nie znaleziono polecenia ollama.",
-            **selected,
-        }
-
-    safe_model = selected["ollama_model"].replace(":", "-").replace(".", "-")
-    unit = f"freepbx-ai-model-pull-{safe_model}"
-
-    try:
-        subprocess.run(
-            ["systemctl", "stop", unit],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        pull = subprocess.run(
-            [
-                "systemd-run",
-                f"--unit={unit}",
-                "--collect",
-                "--property=Type=exec",
-                "/bin/bash",
-                "/opt/freepbx-ai-icproject/scripts/pull-model.sh",
-                selected["ollama_model"],
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception as e:
-        return {
-            "ok": False,
-            "message": f"Profil zapisano, ale nie udało się uruchomić pobierania modelu: {e}",
-            **selected,
-        }
-
-    if pull.returncode != 0:
-        detail = (pull.stderr or pull.stdout or "").strip()
-        return {
-            "ok": False,
-            "message": "Profil zapisano, ale uruchomienie pobierania modelu nie powiodło się"
-                       + (f": {detail}" if detail else "."),
-            **selected,
-        }
-
     return {
         "ok": True,
-        "message": f"Profil zapisany. Pobieranie {selected['ollama_model']} uruchomione w tle.",
-        "pull_unit": unit,
+        "message": f"Profil STT zapisany: Whisper {selected['whisper_model']} / {selected['whisper_compute_type']}.",
         **selected,
     }
 
@@ -379,8 +322,6 @@ async def index(request: Request):
 @app.post("/save")
 async def save(
     request: Request,
-    ollama_url: str = Form(...),
-    ollama_model: str = Form(...),
     whisper_model: str = Form(...),
     whisper_device: str = Form(...),
     whisper_compute_type: str = Form(...),
@@ -407,14 +348,11 @@ async def save(
     icp_board_column_name: str = Form(""),
     icp_priority: str = Form("normal"),
     greeting: str = Form(...),
-    system_prompt: str = Form(...),
     max_turns: int = Form(8),
     silence_ms: int = Form(900),
 ):
     current = load_settings()
     data = {
-        "ollama_url": ollama_url,
-        "ollama_model": ollama_model,
         "whisper_model": whisper_model,
         "whisper_device": whisper_device,
         "whisper_compute_type": whisper_compute_type,
@@ -440,7 +378,6 @@ async def save(
         "icp_board_column_name": icp_board_column_name,
         "icp_priority": icp_priority,
         "greeting": greeting,
-        "system_prompt": system_prompt,
         "max_turns": max_turns,
         "silence_ms": silence_ms,
     }
@@ -500,118 +437,6 @@ async def icp_columns(
     except Exception as e:
         return {"ok": False, "message": str(e), "items": []}
 
-
-@app.get("/api/ollama/model-status")
-async def ollama_model_status():
-    s = load_settings()
-    base_url = s["ollama_url"].rstrip("/")
-    configured_model = s.get("ollama_model", "")
-
-    state = MODEL_PULL_STATE_FILE.read_text().strip() if MODEL_PULL_STATE_FILE.exists() else "idle"
-    pulling_model = MODEL_PULL_MODEL_FILE.read_text().strip() if MODEL_PULL_MODEL_FILE.exists() else ""
-    pull_log = MODEL_PULL_LOG_FILE.read_text(errors="replace")[-8000:] if MODEL_PULL_LOG_FILE.exists() else ""
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{base_url}/api/tags")
-            r.raise_for_status()
-            models = [
-                x.get("name")
-                for x in r.json().get("models", [])
-                if x.get("name")
-            ]
-        installed = configured_model in models
-        if installed and pulling_model == configured_model and state == "running":
-            state = "success"
-
-        return {
-            "ok": True,
-            "configured_model": configured_model,
-            "installed": installed,
-            "models": models,
-            "pull_state": state,
-            "pulling_model": pulling_model,
-            "pull_log": pull_log,
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "configured_model": configured_model,
-            "installed": False,
-            "pull_state": state,
-            "pulling_model": pulling_model,
-            "pull_log": pull_log,
-            "message": str(e),
-        }
-
-
-@app.post("/api/test/ollama")
-async def test_ollama():
-    s = load_settings()
-    base_url = s["ollama_url"].rstrip("/")
-    configured_model = s.get("ollama_model", "")
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            tags = await client.get(f"{base_url}/api/tags")
-            tags.raise_for_status()
-            installed_models = [
-                x.get("name")
-                for x in tags.json().get("models", [])
-                if x.get("name")
-            ]
-
-            installed = any(
-                name == configured_model
-                or name.split(":")[0] == configured_model.split(":")[0]
-                and configured_model in name
-                for name in installed_models
-            )
-
-            if not configured_model:
-                return {
-                    "ok": False,
-                    "configured_model": "",
-                    "installed": False,
-                    "models": installed_models,
-                    "message": "Brak skonfigurowanego modelu Ollama.",
-                }
-
-            if not installed:
-                return {
-                    "ok": False,
-                    "configured_model": configured_model,
-                    "installed": False,
-                    "models": installed_models,
-                    "message": f"Model {configured_model} jest ustawiony, ale nie jest jeszcze zainstalowany.",
-                }
-
-            test = await client.post(
-                f"{base_url}/api/generate",
-                json={
-                    "model": configured_model,
-                    "prompt": "Odpowiedz wyłącznie słowem OK.",
-                    "stream": False,
-                    "options": {"num_predict": 8},
-                },
-            )
-            test.raise_for_status()
-            response_text = (test.json().get("response") or "").strip()
-
-        return {
-            "ok": True,
-            "configured_model": configured_model,
-            "installed": True,
-            "models": installed_models,
-            "response": response_text,
-            "message": f"Model {configured_model} odpowiada poprawnie.",
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "configured_model": configured_model,
-            "message": str(e),
-        }
 
 @app.post("/api/test/piper")
 async def test_piper():
