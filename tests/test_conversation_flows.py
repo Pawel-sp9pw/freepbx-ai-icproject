@@ -1457,7 +1457,10 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.saved, [])
         self.assertTrue(h.session.confirmation_pending)
 
-    async def test_general_llm_path_cannot_overwrite_existing_ticket_fields(self):
+    async def test_runtime_has_no_ollama_call_path(self):
+        self.assertFalse(hasattr(audiosocket, "ask_ollama"))
+
+    async def test_deterministic_fallback_asks_for_first_missing_field(self):
         h = ConversationHarness()
         h.session.ticket_data = {
             "company": "Prawidłowa Firma",
@@ -1468,27 +1471,17 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         h.session.awaiting_contact = False
         h.session.awaiting_problem = False
 
-        async def fake_ask(*args, **kwargs):
-            return {
-                "reply": "ignore",
-                "done": True,
-                "ticket": {
-                    "company": "Administrator",
-                    "contact": "600100200",
-                    "description": "Problem",
-                    "priority": "high",
-                    "caller": "111111111",
-                },
-            }
-
-        with patch.object(audiosocket, "ask_ollama", new=fake_ask):
-            await h.user("Mam problem z systemem")
+        await h.user("Mam problem z systemem")
 
         self.assertEqual(h.session.ticket_data["company"], "Prawidłowa Firma")
-        self.assertEqual(h.session.ticket_data["contact"], "600100200")
-        self.assertEqual(h.session.ticket_data["description"], "Problem")
-        self.assertNotIn("priority", h.session.ticket_data)
-        self.assertNotIn("caller", h.session.ticket_data)
+        self.assertNotIn("description", h.session.ticket_data)
+        self.assertTrue(h.session.awaiting_contact)
+        self.assertFalse(h.session.awaiting_company)
+        self.assertFalse(h.session.awaiting_problem)
+        self.assertTrue(
+            any("numer telefonu kontaktowego" in x.lower() for x in h.spoken)
+        )
+
 
     async def test_goodbye_after_description_saves_unconfirmed_ticket(self):
         h = ConversationHarness()
