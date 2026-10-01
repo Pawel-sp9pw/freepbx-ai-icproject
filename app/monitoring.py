@@ -288,7 +288,6 @@ def runtime_status():
 def service_status():
     services = [
         ("freepbx-ai", "Agent"),
-        ("ollama", "Ollama"),
         ("piper-ai", "Piper TTS"),
         ("caddy", "Caddy"),
         ("wg-quick@wg0", "WireGuard"),
@@ -371,7 +370,6 @@ def _temperature_status():
 def process_resource_status():
     groups = {
         "Agent": {"match": ("uvicorn", "app.main:app", "freepbx-ai"), "cpu": 0.0, "rss": 0, "count": 0},
-        "Ollama": {"match": ("ollama",), "cpu": 0.0, "rss": 0, "count": 0},
         "Piper TTS": {"match": ("piper.http_server", "piper"), "cpu": 0.0, "rss": 0, "count": 0},
         "Caddy": {"match": ("caddy",), "cpu": 0.0, "rss": 0, "count": 0},
     }
