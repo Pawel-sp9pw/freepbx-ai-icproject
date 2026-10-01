@@ -621,6 +621,47 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             "Nie działa drukarka fiskalna",
         )
 
+    async def test_short_empty_confirmation_residual_does_not_consume_attempt(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {
+            "company": "Novo med",
+            "contact": "535836535",
+            "description": "Program medyczny nie działa",
+        }
+        h.session.confirmation_pending = True
+        h.session.awaiting_company = False
+        h.session.last_tts_end = audiosocket.time.monotonic()
+
+        empty = {
+            "selected": "",
+            "selected_score": None,
+            "mode": "confirmation",
+            "audio_seconds": 0.70,
+            "model": "medium",
+            "pass1": {"text": "", "score": None, "rejected": True, "reason": "empty"},
+            "pass2": None,
+            "retry": False,
+            "retry_reason": "",
+        }
+        with patch.object(audiosocket, "transcribe_pcm16", return_value=empty), \
+             patch.object(audiosocket, "add_message", return_value=None):
+            before = len(h.spoken)
+            await h.session.process_utterance(b"\x00" * int(16000 * 0.70))
+
+        self.assertEqual(h.session.confirmation_misses, 0)
+        self.assertEqual(len(h.spoken), before)
+        self.assertTrue(h.session.confirmation_pending)
+
+    def test_trailing_hey_artifact_is_removed_only_from_problem_tail(self):
+        self.assertEqual(
+            audiosocket.clean_problem_description("Program medyczny nie działa. Hej!"),
+            "Program medyczny nie działa.",
+        )
+        self.assertEqual(
+            audiosocket.clean_problem_description("Hej, program medyczny nie działa."),
+            "Hej, program medyczny nie działa.",
+        )
+
     async def test_low_confidence_contact_prevents_auto_save(self):
         h = ConversationHarness()
         await h.start()
