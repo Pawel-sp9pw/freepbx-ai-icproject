@@ -122,7 +122,7 @@ def parse_company_alias_dictionary(raw: str):
             if key and key not in seen:
                 seen.add(key)
                 normalized_aliases.append(value)
-        items.append({"name": canonical, "aliases": normalized_aliases})
+        items.append({"name": canonical, "aliases": normalized_aliases, "from_company_dictionary": True})
     return items
 
 
@@ -136,7 +136,7 @@ def merge_company_alias_dictionary(customers, alias_items):
             continue
         target = by_name.get(key)
         if target is None:
-            target = {"name": canonical, "phone": "", "aliases": []}
+            target = {"name": canonical, "phone": "", "aliases": [], "from_company_dictionary": True}
             merged.append(target)
             by_name[key] = target
         existing = list(target.get("aliases") or [])
@@ -147,6 +147,7 @@ def merge_company_alias_dictionary(customers, alias_items):
                 existing.append(alias)
                 existing_keys.add(alias_key)
         target["aliases"] = existing
+        target["from_company_dictionary"] = True
     return merged
 
 
@@ -763,6 +764,72 @@ def extract_problem_fragment(text: str):
     return fragment
 
 
+def _company_phonetic_fold(value: str):
+    value = normalize_company(value)
+    replacements = (
+        ("sch", "sz"), ("ch", "h"), ("rz", "z"), ("ż", "z"), ("ź", "z"),
+        ("ó", "u"), ("ą", "on"), ("ę", "en"), ("v", "w"), ("q", "k"),
+        ("x", "ks"), ("ph", "f"), ("th", "t"),
+    )
+    for old, new in replacements:
+        value = value.replace(old, new)
+    return re.sub(r"[^a-z0-9]", "", value)
+
+
+def rank_company_candidates(company: str, directory: list):
+    source = normalize_company(company)
+    if not source:
+        return []
+
+    source_compact = source.replace(" ", "")
+    source_phonetic = _company_phonetic_fold(source)
+    source_tokens = source.split()
+    ranked = []
+
+    for item in directory:
+        variants = [item.get("name", ""), *(item.get("aliases") or [])]
+        best = 0.0
+        best_variant = ""
+        for variant in variants:
+            target = normalize_company(variant)
+            if not target:
+                continue
+            target_compact = target.replace(" ", "")
+            target_phonetic = _company_phonetic_fold(target)
+
+            score = SequenceMatcher(None, source, target).ratio()
+            if source_compact and target_compact:
+                score = max(score, SequenceMatcher(None, source_compact, target_compact).ratio())
+            if source_phonetic and target_phonetic:
+                score = max(score, SequenceMatcher(None, source_phonetic, target_phonetic).ratio())
+
+            target_tokens = target.split()
+            if source_tokens and target_tokens:
+                token_scores = [
+                    SequenceMatcher(None, s, t).ratio()
+                    for s in source_tokens
+                    for t in target_tokens
+                    if s and t
+                ]
+                if token_scores:
+                    score = max(score, max(token_scores) * 0.94)
+
+            if source == target:
+                score = 1.0
+            elif source in target or target in source:
+                score = max(score, 0.94)
+
+            if score > best:
+                best = score
+                best_variant = variant
+
+        if best > 0:
+            ranked.append((best, item, best_variant))
+
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    return ranked
+
+
 def match_customer(company: str, contact: str, directory: list):
     contact_digits = re.sub(r"\D", "", contact or "")
     # Phone/CallerID is authoritative and always wins over fuzzy name matching.
@@ -787,49 +854,22 @@ def match_customer(company: str, contact: str, directory: list):
     if not source:
         return None, 0.0
 
-    candidates = []
-    for item in directory:
-        variants = [item.get("name", ""), *(item.get("aliases") or [])]
-        best_variant_score = 0.0
-        for variant in variants:
-            target = normalize_company(variant)
-            if not target:
-                continue
-
-            score = SequenceMatcher(None, source, target).ratio()
-            compact_source = source.replace(" ", "")
-            compact_target = target.replace(" ", "")
-            if compact_source and compact_target:
-                score = max(
-                    score,
-                    SequenceMatcher(None, compact_source, compact_target).ratio(),
-                )
-
-            # Exact token containment is a strong signal for inputs such as
-            # "Firma Paweł" vs "Paweł", after conversational prefixes are removed.
-            if source == target:
-                score = 1.0
-            elif source in target or target in source:
-                score = max(score, 0.90)
-
-            best_variant_score = max(best_variant_score, score)
-
-        if best_variant_score > 0:
-            candidates.append((best_variant_score, item))
-
-    if not candidates:
+    ranked = rank_company_candidates(company, directory)
+    if not ranked:
         return None, 0.0
 
-    candidates.sort(key=lambda pair: pair[0], reverse=True)
-    best_score, best = candidates[0]
-    second_score = candidates[1][0] if len(candidates) > 1 else 0.0
+    best_score, best, _ = ranked[0]
+    second_score = ranked[1][0] if len(ranked) > 1 else 0.0
     margin = best_score - second_score
-
-    # Short names are especially prone to Whisper substitutions (Atul/Ator
-    # for Artur). Allow a slightly lower score only when the best candidate
-    # clearly beats every alternative. Otherwise ask for confirmation.
     compact_len = len(source.replace(" ", ""))
-    if compact_len <= 6:
+    dictionary_entry = bool(best.get("from_company_dictionary"))
+
+    if dictionary_entry:
+        if compact_len <= 6:
+            accepted = best_score >= 0.54 and margin >= 0.14
+        else:
+            accepted = best_score >= 0.60 and margin >= 0.10
+    elif compact_len <= 6:
         accepted = best_score >= 0.62 and margin >= 0.18
     else:
         accepted = best_score >= 0.72 and margin >= 0.12
