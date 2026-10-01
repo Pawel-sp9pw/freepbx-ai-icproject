@@ -1470,8 +1470,11 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             "ollama_model": "qwen3:4b",
             "system_prompt": "legacy",
         }
-        with patch.object(config.SETTINGS_FILE, "exists", return_value=True), \
-             patch.object(config.SETTINGS_FILE, "read_text", return_value=__import__("json").dumps(legacy)):
+        fake_settings_file = types.SimpleNamespace(
+            exists=lambda: True,
+            read_text=lambda: __import__("json").dumps(legacy),
+        )
+        with patch.object(config, "SETTINGS_FILE", fake_settings_file):
             loaded = config.load_settings()
         self.assertNotIn("ollama_url", loaded)
         self.assertNotIn("ollama_model", loaded)
