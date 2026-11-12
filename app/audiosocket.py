@@ -2525,6 +2525,7 @@ async def handle_client(reader, writer):
             if caller_digits:
                 session.original_caller = caller_digits
                 session.ticket_data["contact"] = caller_digits
+                session.contact_trusted = True
                 session.mark_ticket_field("contact", "callerid", None, True)
                 matched_customer, match_score = match_customer(
                     "",
