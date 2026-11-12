@@ -235,7 +235,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         for field in ("company", "contact", "description"):
             self.assertNotEqual(h.session.ticket_field_meta[field]["source"], "unknown")
 
-    async def test_recognized_caller_problem_yes_creates_ticket(self):
+    async def test_recognized_caller_problem_is_saved_without_confirmation(self):
         h = ConversationHarness()
         h.session.ticket_data = {
             "company": "Paweł",
@@ -246,14 +246,9 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(h.session.awaiting_problem)
 
         await h.user("Nie działa wystawianie recept")
-        self.assertTrue(h.session.confirmation_pending)
-        self.assertEqual(
-            h.session.ticket_data["description"],
-            "Nie działa wystawianie recept",
-        )
-
-        await h.user("Tak")
         self.assertEqual(len(h.saved), 1)
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertFalse(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
         self.assertFalse(h.saved[0]["uncertain"])
         self.assertEqual(h.saved[0]["ticket"]["company"], "Paweł")
         self.assertEqual(h.saved[0]["ticket"]["contact"], "792032104")
@@ -285,7 +280,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             "Nie działa wystawianie recept",
         )
 
-    async def test_medium_confidence_problem_still_requires_confirmation(self):
+    async def test_medium_confidence_problem_is_saved_without_readback(self):
         h = ConversationHarness()
         h.session.ticket_data = {
             "company": "Paweł",
@@ -295,9 +290,9 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         await h.start()
         await h.user("Sanery kodów przy kasie przestało reagować", score=-0.379)
 
-        self.assertEqual(h.saved, [])
-        self.assertTrue(h.session.confirmation_pending)
-        self.assertTrue(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
+        self.assertEqual(len(h.saved), 1)
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertFalse(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
 
     async def test_company_phone_recovery_uses_contact_stt_mode_and_hotwords(self):
         h = ConversationHarness()
@@ -662,7 +657,7 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
             "Hej, program medyczny nie działa.",
         )
 
-    async def test_low_confidence_contact_prevents_auto_save(self):
+    async def test_low_confidence_contact_is_saved_without_readback(self):
         h = ConversationHarness()
         await h.start()
 
@@ -670,20 +665,37 @@ class FullConversationFlowTests(unittest.IsolatedAsyncioTestCase):
         await h.user("600 100 200", score=-0.55)
         await h.user("Nie działa drukarka", score=-0.20)
 
-        self.assertEqual(h.saved, [])
-        self.assertTrue(h.session.confirmation_pending)
-        self.assertTrue(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
+        self.assertEqual(len(h.saved), 1)
+        self.assertTrue(h.saved[0]["uncertain"])
+        self.assertFalse(h.session.confirmation_pending)
+        self.assertFalse(any("podsumuję zgłoszenie" in x.lower() for x in h.spoken))
 
-    async def test_company_prefix_is_not_repeated_in_confirmation(self):
+    async def test_low_confidence_company_is_stored_without_confirmation(self):
         h = ConversationHarness()
         await h.start()
 
         await h.user("Firma Alpha Pist", score=-0.80)
 
-        self.assertTrue(h.session.company_confirmation_pending)
-        self.assertEqual(h.session.company_candidate, "Alpha Pist")
-        self.assertTrue(any("firma alpha pist" in x.lower() for x in h.spoken))
-        self.assertFalse(any("firma firma" in x.lower() for x in h.spoken))
+        self.assertEqual(h.session.ticket_data["company"], "Alpha Pist")
+        self.assertFalse(h.session.company_confirmation_pending)
+        self.assertTrue(h.session.awaiting_contact)
+        self.assertFalse(any("czy dobrze zrozumiałem" in x.lower() for x in h.spoken))
+
+    async def test_unrecognized_spoken_contact_falls_back_to_inbound_callerid(self):
+        h = ConversationHarness()
+        h.session.ticket_data = {"company": "Alfatest"}
+        h.session.company_trusted = True
+        h.session.original_caller = "608411319"
+        await h.start()
+        self.assertTrue(h.session.awaiting_contact)
+
+        await h.user("numeru nie pamiętam", score=-0.40)
+
+        self.assertEqual(h.session.ticket_data["contact"], "608411319")
+        self.assertEqual(h.session.ticket_field_meta["contact"]["source"], "callerid_fallback")
+        self.assertTrue(h.session.contact_trusted)
+        self.assertTrue(h.session.awaiting_problem)
+        self.assertTrue(any("proszę opisać problem" in x.lower() for x in h.spoken))
 
     async def test_cancellation_during_contact_state_ends_without_ticket(self):
         h = ConversationHarness()
