@@ -1057,6 +1057,30 @@ class CallSession:
             and self.problem_confidence_is_high(problem_score)
         )
 
+    async def finalize_collected_ticket(self):
+        """Short production flow: save collected data without voice readback.
+
+        Low-confidence fields are preserved exactly as collected and marked
+        uncertain for the service team instead of making the caller confirm
+        the whole ticket.
+        """
+        if not self.has_complete_ticket_data():
+            return False
+        uncertain = self.ticket_has_untrusted_fields()
+        warning = ""
+        if uncertain:
+            warning = (
+                "UWAGA: Zgłoszenie zapisano bez odczytywania i potwierdzania danych. "
+                "Co najmniej jedno pole pochodzi z niepewnego rozpoznania mowy."
+            )
+        self.confirmation_pending = False
+        self.company_confirmation_pending = False
+        self.awaiting_correction = False
+        return await self.finalize_ticket(
+            uncertain=uncertain,
+            warning_text=warning,
+        )
+
     async def finalize_ticket(self, uncertain=False, silent=False, warning_text=""):
         ticket = dict(self.ticket_data)
 
@@ -1119,19 +1143,15 @@ class CallSession:
             if not silent:
                 if uncertain and warning_text:
                     await self.say(
-                        "Dziękuję. Zgłoszenie zostało zapisane. "
-                        "Ktoś z serwisu skontaktuje się w tej sprawie. Do widzenia."
+                        "Dziękuję. Zgłoszenie zapisane. Do widzenia."
                     )
                 elif uncertain:
                     await self.say(
-                        "Dziękuję. Zgłoszenie zostało przyjęte. "
-                        "Nie udało mi się dokładnie rozpoznać wszystkich poprawek. "
-                        "Ktoś z serwisu skontaktuje się w celu doprecyzowania. Do widzenia."
+                        "Dziękuję. Zgłoszenie zapisane. Do widzenia."
                     )
                 else:
                     await self.say(
-                        "Dziękuję. Zgłoszenie zostało zapisane. "
-                        "Ktoś z serwisu skontaktuje się w tej sprawie. Do widzenia."
+                        "Dziękuję. Zgłoszenie zapisane. Do widzenia."
                     )
             self.closed = True
             if not silent:
@@ -1342,10 +1362,10 @@ class CallSession:
                         self.awaiting_company = False
                         if self.ticket_data.get("contact"):
                             self.awaiting_problem = True
-                            await self.say("Dziękuję. Proszę opisać problem.")
+                            await self.say("Proszę opisać problem.")
                         else:
                             self.awaiting_contact = True
-                            await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                            await self.say("Proszę podać numer telefonu kontaktowego.")
                     else:
                         self.company_rejection_total += 1
                         self.company_confirmation_pending = False
@@ -1438,7 +1458,7 @@ class CallSession:
                             await self.say_confirmation_summary()
                         else:
                             self.awaiting_problem = True
-                            await self.say("Dziękuję. Proszę opisać problem.")
+                            await self.say("Proszę opisać problem.")
                     else:
                         self.awaiting_company_phone_recovery = False
                         self.awaiting_company = True
@@ -1461,7 +1481,7 @@ class CallSession:
                         await self.say_confirmation_summary()
                     return
                 self.awaiting_problem = True
-                await self.say("Dziękuję. Proszę opisać problem.")
+                await self.say("Proszę opisać problem.")
                 return
 
     async def process_utterance(self, pcm: bytes):
@@ -1790,15 +1810,15 @@ class CallSession:
 
                     self.awaiting_contact = True
                     self.awaiting_problem = False
-                    await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                    await self.say("Proszę podać numer telefonu kontaktowego.")
                     return
 
                 if self.ticket_data.get("contact"):
                     self.awaiting_problem = True
-                    await self.say("Dziękuję. Proszę opisać problem.")
+                    await self.say("Proszę opisać problem.")
                 else:
                     self.awaiting_contact = True
-                    await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                    await self.say("Proszę podać numer telefonu kontaktowego.")
                 return
 
             if matches_confirmation_phrase(normalized, no_phrases):
@@ -2166,7 +2186,7 @@ class CallSession:
                         self.awaiting_company = False
                         self.contact_attempts = 0
                         self.awaiting_problem = True
-                        await self.say("Dziękuję. Proszę opisać problem.")
+                        await self.say("Proszę opisać problem.")
                         return
 
                 # We explicitly asked for a phone number. Never reinterpret a
@@ -2206,7 +2226,7 @@ class CallSession:
                     self.company_recognition_failures = 0
                     self.awaiting_company = False
                     self.awaiting_problem = True
-                    await self.say("Dziękuję. Proszę opisać problem.")
+                    await self.say("Proszę opisać problem.")
                     return
 
             if looks_like_invalid_company_name(company_text):
@@ -2254,18 +2274,6 @@ class CallSession:
             )
             self.record_customer_match("initial_company", company_text, phone, matched_customer, match_score)
             if matched_customer:
-                if matched_customer.get("from_company_dictionary") and match_score < 0.86:
-                    self.company_confirmation_pending = True
-                    self.company_candidate = str(matched_customer.get("name", "") or "").strip()
-                    self.company_candidate_score = float(selected_score) if selected_score is not None else None
-                    self.company_confirmation_context = "initial"
-                    self.company_candidate_phone = matched_customer.get("phone") or ""
-                    self.awaiting_company = False
-                    await self.say(
-                        f"Czy chodzi o firmę {self.company_candidate}? "
-                        "Proszę powiedzieć tak albo nie."
-                    )
-                    return
                 self.ticket_data["company"] = matched_customer["name"]
                 self.company_trusted = True
                 self.mark_ticket_field("company", "directory", match_score, True)
@@ -2274,51 +2282,11 @@ class CallSession:
                     self.contact_trusted = True
                     self.mark_ticket_field("contact", "directory", None, True)
             else:
-                ranked_candidates = rank_company_candidates(company_text, self.customer_directory)
-                if ranked_candidates:
-                    best_score, best_item, _ = ranked_candidates[0]
-                    second_score = ranked_candidates[1][0] if len(ranked_candidates) > 1 else 0.0
-                    margin = best_score - second_score
-                    if (
-                        best_item.get("from_company_dictionary")
-                        and best_score >= 0.42
-                        and margin >= 0.10
-                    ):
-                        self.company_confirmation_pending = True
-                        self.company_candidate = str(best_item.get("name", "") or "").strip()
-                        self.company_candidate_score = float(selected_score) if selected_score is not None else None
-                        self.company_confirmation_context = "initial"
-                        self.company_candidate_phone = best_item.get("phone") or ""
-                        self.awaiting_company = False
-                        await self.say(f"Czy chodzi o firmę {self.company_candidate}?")
-                        return
-
-                confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
-                low_confidence = (
-                    selected_score is not None
-                    and float(selected_score) < confirm_threshold
-                )
-                normalized_candidate = normalize_company(company_text)
-                was_rejected = normalized_candidate in self.rejected_company_names
-                rejected_count = self.rejected_company_counts.get(normalized_candidate, 0)
-                if self.company_rejection_total >= 2 or (was_rejected and rejected_count >= 2):
-                    self.awaiting_company = True
-                    self.awaiting_company_phone_recovery = True
-                    await self.say(
-                        "Ta nazwa była już odrzucona. "
-                        "Proszę podać numer telefonu kontaktowego, spróbuję odnaleźć firmę."
-                    )
-                    return
-                if low_confidence or was_rejected:
-                    self.company_confirmation_pending = True
-                    self.company_candidate = company_text
-                    self.company_candidate_score = float(selected_score)
-                    self.company_confirmation_context = "initial"
-                    self.company_candidate_phone = phone or ""
-                    self.awaiting_company = False
-                    await self.say(f"Czy dobrze zrozumiałem: firma {company_text}?")
-                    return
+                # Do not ask the caller to confirm the company name. Store the
+                # best transcription we have and let the service team see the
+                # STT confidence in field metadata.
                 self.ticket_data["company"] = company_text
+                confirm_threshold = float(self.settings.get("company_confirm_logprob", -0.55))
                 self.company_trusted = bool(
                     selected_score is not None
                     and float(selected_score) >= confirm_threshold
@@ -2340,51 +2308,55 @@ class CallSession:
                 if self.ticket_data.get("contact"):
                     self.awaiting_contact = False
                     self.awaiting_problem = False
-                    if self.can_auto_finalize(self.early_problem_score):
-                        await self.finalize_ticket()
-                    else:
-                        self.confirmation_pending = True
-                        self.confirmation_misses = 0
-                        await self.say_confirmation_summary()
+                    await self.finalize_collected_ticket()
                     return
 
                 self.awaiting_contact = True
                 self.awaiting_problem = False
-                await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                await self.say("Proszę podać numer telefonu kontaktowego.")
                 return
 
             if self.ticket_data.get("contact"):
                 self.awaiting_problem = True
-                await self.say("Dziękuję. Proszę opisać problem.")
+                await self.say("Proszę opisać problem.")
             else:
                 self.awaiting_contact = True
-                await self.say("Dziękuję. Proszę podać numer telefonu kontaktowego.")
+                await self.say("Proszę podać numer telefonu kontaktowego.")
             return
 
         if self.awaiting_contact:
             phone = extract_phone_digits(text, self.settings.get("phone_validation_mode", "pl"))
             if not phone:
-                    self.contact_attempts += 1
-                    if self.contact_attempts >= 2:
-                        self.awaiting_contact_dtmf = True
-                        self.dtmf_contact_buffer = ""
-                        self.dtmf_contact_context = "initial"
-                        await self.say(
-                            "Nie udało mi się pewnie rozpoznać numeru. "
-                            "Proszę wpisać dziewięć cyfr na klawiaturze telefonu i zakończyć krzyżykiem."
-                        )
+                    # The callback number is the most important field. If STT
+                    # cannot parse a spoken number, use the actual inbound
+                    # CallerID instead of extending the conversation.
+                    caller_fallback = extract_phone_digits(
+                        self.original_caller,
+                        self.settings.get("phone_validation_mode", "pl"),
+                    )
+                    if caller_fallback:
+                        phone = caller_fallback
+                        self.contact_trusted = True
+                        self.mark_ticket_field("contact", "callerid_fallback", None, True)
                     else:
-                        await self.say(
-                            "Nie udało mi się rozpoznać numeru telefonu. "
-                            "Proszę podać go cyfra po cyfrze."
-                        )
-                    return
+                        self.contact_attempts += 1
+                        if self.contact_attempts >= 2:
+                            self.awaiting_contact_dtmf = True
+                            self.dtmf_contact_buffer = ""
+                            self.dtmf_contact_context = "initial"
+                            await self.say(
+                                "Nie rozpoznałem numeru. Proszę wpisać dziewięć cyfr i zakończyć krzyżykiem."
+                            )
+                        else:
+                            await self.say("Proszę podać numer telefonu cyfra po cyfrze.")
+                        return
 
             self.contact_attempts = 0
             self.awaiting_contact_dtmf = False
             self.ticket_data["contact"] = phone
-            self.contact_trusted = self.contact_confidence_is_high(selected_score)
-            self.mark_ticket_field("contact", "stt", selected_score, self.contact_trusted)
+            if (self.ticket_field_meta.get("contact") or {}).get("source") != "callerid_fallback":
+                self.contact_trusted = self.contact_confidence_is_high(selected_score)
+                self.mark_ticket_field("contact", "stt", selected_score, self.contact_trusted)
 
             matched_customer, match_score = match_customer(
                 str(self.ticket_data.get("company", "") or ""),
@@ -2415,16 +2387,11 @@ class CallSession:
                     self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
 
                 self.awaiting_problem = False
-                if self.can_auto_finalize(self.early_problem_score):
-                    await self.finalize_ticket()
-                else:
-                    self.confirmation_pending = True
-                    self.confirmation_misses = 0
-                    await self.say_confirmation_summary()
+                await self.finalize_collected_ticket()
                 return
 
             self.awaiting_problem = True
-            await self.say("Dziękuję. Proszę opisać problem.")
+            await self.say("Proszę opisać problem.")
             return
 
         # Explicit conversation state beats LLM inference. If we just asked
@@ -2491,15 +2458,7 @@ class CallSession:
                 self.awaiting_contact = False
                 self.awaiting_problem = False
 
-                if self.can_auto_finalize(selected_score):
-                    self.confirmation_pending = False
-                    self.confirmation_misses = 0
-                    await self.finalize_ticket()
-                    return
-
-                self.confirmation_pending = True
-                self.confirmation_misses = 0
-                await self.say_confirmation_summary()
+                await self.finalize_collected_ticket()
                 return
 
         # Deterministic recovery path. Normal ticket collection should already
@@ -2542,15 +2501,7 @@ class CallSession:
         if not self.ticket_data.get("title"):
             self.ticket_data["title"] = description[:80] or "Zgłoszenie telefoniczne"
 
-        if self.can_auto_finalize(self.early_problem_score):
-            self.confirmation_pending = False
-            self.confirmation_misses = 0
-            await self.finalize_ticket()
-            return
-
-        self.confirmation_pending = True
-        self.confirmation_misses = 0
-        await self.say_confirmation_summary()
+        await self.finalize_collected_ticket()
         return
 
 async def handle_client(reader, writer):
